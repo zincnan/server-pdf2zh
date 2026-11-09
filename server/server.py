@@ -223,7 +223,8 @@ def create_app(config=None):
 def main():
     from waitress import create_server
     app = create_app()
-    server = create_server(app, host='0.0.0.0', port=int(os.environ.get('PORT', '8890')),
+    port = int(os.environ.get('PORT', '7000'))
+    server = create_server(app, host='0.0.0.0', port=port,
                            threads=16, max_request_body_size=app.config['MAX_CONTENT_LENGTH'],
                            channel_timeout=60, expose_tracebacks=False)
     stopping = threading.Event()
@@ -235,7 +236,7 @@ def main():
     signal.signal(signal.SIGINT, stop)
     thread = threading.Thread(target=server.run, name='http', daemon=True)
     thread.start()
-    print('PDF Translate listening on :8890', flush=True)
+    print(f'PDF Translate listening on :{port}', flush=True)
     while thread.is_alive() and not stopping.wait(0.5):
         pass
     clean = app.extensions['tasks'].shutdown(int(os.environ.get('SHUTDOWN_GRACE_SECONDS', '600')))

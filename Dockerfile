@@ -15,5 +15,5 @@ RUN python /opt/prepare_assets.py && \
     mkdir -p /data && chown 10001:10001 /data
 COPY server /app/server
 USER 10001:10001
-EXPOSE 8890
+EXPOSE 7000
 CMD ["python", "/app/server/server.py"]

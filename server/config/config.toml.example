@@ -64,7 +64,7 @@ save_auto_extracted_glossary = false
 pool_max_workers = "null"
 term_qps = "null"
 term_pool_max_workers = "null"
-no_auto_extract_glossary = false
+no_auto_extract_glossary = true
 primary_font_family = "null"
 
 [pdf]
@@ -85,7 +85,7 @@ max_pages_per_part = "null"
 translate_table_text = false
 skip_scanned_detection = false
 ocr_workaround = false
-auto_enable_ocr_workaround = false
+auto_enable_ocr_workaround = true
 only_include_translated_page = false
 no_merge_alternating_line_numbers = false
 no_remove_non_formula_lines = false

@@ -4,7 +4,7 @@ services:
     image: pdf2zh-web:local
     init: true
     ports:
-      - "${BIND_ADDRESS:-127.0.0.1}:${PORT:-8890}:8890"
+      - "${BIND_ADDRESS:-127.0.0.1}:${PORT:-7000}:7000"
     environment:
       PUBLISHED_BIND_ADDRESS: ${BIND_ADDRESS:-127.0.0.1}
       ACCESS_PASSWORD: ${ACCESS_PASSWORD:-pdf2zh}
@@ -23,7 +23,7 @@ services:
     cap_drop:
       - ALL
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8890/health', timeout=3)"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:7000/health', timeout=3)"]
       interval: 30s
       timeout: 5s
       start_period: 30s

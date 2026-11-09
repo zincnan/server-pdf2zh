@@ -16,8 +16,8 @@ DEFAULTS = {
     'sourceLang': 'en', 'targetLang': 'zh-CN', 'qps': 4, 'poolSize': 0,
     'skipLastPages': 0, 'mono': True, 'dual': True, 'dualMode': 'LR',
     'mono_cut': False, 'dual_cut': False, 'compare': False, 'crop_compare': False,
-    'transFirst': False, 'ocr': False, 'autoOcr': False, 'noWatermark': True,
-    'saveGlossary': False, 'disableGlossary': False, 'skipClean': False,
+    'transFirst': False, 'ocr': False, 'autoOcr': True, 'noWatermark': True,
+    'saveGlossary': False, 'disableGlossary': True, 'skipClean': False,
     'enhanceCompatibility': False, 'disableRichTextTranslate': False,
     'translateTableText': False, 'skipReferences': False, 'ignoreCache': False,
     'onlyIncludeTranslatedPage': False, 'fontFamily': 'auto', 'tableMode': '',
@@ -95,6 +95,8 @@ class Config:
                                   save_auto_extracted_glossary=options['saveGlossary'],
                                   no_auto_extract_glossary=options['disableGlossary'])
         cfg['pdf'].update(only_include_translated_page=options['onlyIncludeTranslatedPage'],
+                          ocr_workaround=options['ocr'],
+                          auto_enable_ocr_workaround=options['autoOcr'],
                           translate_table_text=options['translateTableText'] and not self.table_mode)
         path = Path(destination)
         with path.open('w', encoding='utf-8') as stream:

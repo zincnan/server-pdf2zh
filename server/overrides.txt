@@ -1,0 +1,4 @@
+# pdf2zh-next 2.9.0 declares PyMuPDF<1.25.3; BabelDOC 0.6.4 requires >=1.26.7.
+# Use BabelDOC's supported renderer. This explicit uv override is covered by
+# real IL, Cropper, CLI and translation integration tests. Do not drop silently.
+PyMuPDF==1.26.7

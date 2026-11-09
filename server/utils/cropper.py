@@ -1,6 +1,9 @@
 import fitz
 import os
+import logging
 import traceback
+
+logger = logging.getLogger(__name__)
 import shutil
 
 # --- 辅助函数 ---
@@ -84,7 +87,7 @@ class Cropper():
         return left_clip, right_clip, w, h
 
     def crop_pdf(self, config, input_pdf, infile_type, output_pdf, outfile_type):
-        print(f"🐲 [Cropper] 开始裁剪PDF: {input_pdf} -> {output_pdf} (模式: {outfile_type})")
+        logger.debug(f"🐲 [Cropper] 开始裁剪PDF: {input_pdf} -> {output_pdf} (模式: {outfile_type})")
         try:
             with fitz.open(input_pdf) as src_doc, fitz.open() as new_doc:
                 if len(src_doc) == 0:
@@ -106,9 +109,9 @@ class Cropper():
                 if len(new_doc) == 0:
                     raise ValueError(f"PDF 处理没有生成页面: {outfile_type}")
                 new_doc.save(output_pdf, garbage=4, deflate=True, clean=True)
-                print(f"✅ 处理完成: {output_pdf}")
+                logger.debug(f"✅ 处理完成: {output_pdf}")
         except Exception:
-            traceback.print_exc()
+            logger.debug("PDF operation failed", exc_info=True)
             raise
 
     # Mode: LR -> TB (将宽页拆分成两张窄页)
@@ -144,7 +147,7 @@ class Cropper():
     # 输出: [P1-L, P2-L, P1-R, P2-R] (左栏对照，右栏对照)
     def _process_dual_cut(self, src_doc, new_doc, left_clip, right_clip, config):
         if len(src_doc) % 2 != 0:
-            print("⚠️ [Warning] dual-cut 模式输入页数不是偶数，最后一张可能被忽略。")
+            logger.debug("⚠️ [Warning] dual-cut 模式输入页数不是偶数，最后一张可能被忽略。")
 
         for i in range(0, len(src_doc) // 2 * 2, 2):
             p_trans = i
@@ -164,7 +167,7 @@ class Cropper():
     # 输出: 宽页
     def _process_crop_compare(self, src_doc, new_doc, left_clip, right_clip, w, h, config):
         h_offset = config.pdf_h_offset
-        # trans_first=False 时原文在左 (#290), 与插件"译文在前"设置保持一致。
+        # trans_first=False 时原文在左 (#290), 与“译文在前”选项保持一致。
         trans_first = getattr(config, 'trans_first', True)
 
         # 为了简单，我们创建一个原宽度的页面
@@ -202,7 +205,7 @@ class Cropper():
         修复：奇数页时，最后一页单独放在左侧，右侧留白
         trans_first=False 时原文在左 (#290)。
         """
-        print(f"🐲 开始合并(Compare): {input_path} -> {output_path}")
+        logger.debug(f"🐲 开始合并(Compare): {input_path} -> {output_path}")
         dual_pdf = output_pdf = None
         try:
             dual_pdf = fitz.open(input_path)
@@ -252,11 +255,11 @@ class Cropper():
                     # print(f"ℹ️ 处理奇数尾页: 第 {p_trans_idx + 1} 页")
 
             output_pdf.save(output_path, garbage=4, deflate=True)
-            print(f"✅ 合并成功: {output_path}")
+            logger.debug(f"✅ 合并成功: {output_path}")
 
             return output_path
         except Exception as e:
-            traceback.print_exc()
+            logger.debug("PDF operation failed", exc_info=True)
             raise RuntimeError(f"PDF 合并失败: {input_path} -> {output_path}") from e
         finally:
             if output_pdf is not None:
@@ -318,7 +321,7 @@ class Cropper():
                     shutil.copyfile(dual_path, LR_dual_path)
                 source = LR_dual_path
 
-            print(f"🐲 开始拆分(LR->TB): {source} -> {TB_dual_path}")
+            logger.debug(f"🐲 开始拆分(LR->TB): {source} -> {TB_dual_path}")
             with fitz.open(source) as src_doc, fitz.open() as new_doc:
                 self._process_LR_to_TB(src_doc, new_doc)
                 if len(new_doc) == 0:
@@ -326,7 +329,7 @@ class Cropper():
                 if os.path.exists(TB_dual_path):
                     os.remove(TB_dual_path)
                 new_doc.save(TB_dual_path, garbage=4, deflate=True)
-            print(f"✅ 拆分成功: {TB_dual_path}")
+            logger.debug(f"✅ 拆分成功: {TB_dual_path}")
             return LR_dual_path, TB_dual_path
 
         raise ValueError(f"不支持的 dual 布局转换: {from_mode} -> {to_mode}")

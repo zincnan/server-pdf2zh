@@ -27,7 +27,7 @@ ERROR_RULES: list[dict] = [
     _rule(
         "BITSTRING_INCOMPATIBLE",
         "翻译引擎无法导入 BitStream，通常是 bitstring 依赖版本不兼容。",
-        "请在 Server 目录执行 python manage_packages.py doctor，"
+        "请重新构建固定依赖的 Docker 镜像，"
         "并检查所用环境中的 bitstring 是否为 >=4.3.0,<5。",
         lambda t, l: (
             ("cannot import name 'bitstream'" in l and "bitstring" in l)
@@ -47,7 +47,7 @@ ERROR_RULES: list[dict] = [
     _rule(
         "API_AUTH_FAILED",
         "翻译服务拒绝了身份认证（API Key 或访问权限可能有问题）。",
-        "请核对服务商、API Key 和模型访问权限；不要把完整密钥发到群里。",
+        "请核对服务商、API Key 和模型访问权限；请重新保存正确的模型服务配置。",
         lambda t, l: (
             "invalid_api_key" in l
             or "incorrect api key provided" in l

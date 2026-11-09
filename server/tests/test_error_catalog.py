@@ -12,7 +12,7 @@ class ErrorCatalogTests(unittest.TestCase):
             "ImportError: cannot import name 'BitStream' from 'bitstring'\n"
         )
         self.assertEqual(result["errorCode"], "BITSTRING_INCOMPATIBLE")
-        self.assertIn("doctor", result["hint"])
+        self.assertIn("Docker", result["hint"])
 
     def test_http_429_and_explicit_key_errors(self):
         self.assertEqual(

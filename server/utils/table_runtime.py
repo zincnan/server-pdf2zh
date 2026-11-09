@@ -48,8 +48,8 @@ from utils.table_structure import (
     translation_characters,
 )
 
-FLAG = "--zotero-table-mode"
-REFERENCE_FLAG = "--zotero-reference-skip"
+FLAG = "--table-policy"
+REFERENCE_FLAG = "--skip-references-policy"
 SUPPORTED_BABELDOC_VERSIONS = ("0.6.2", "0.6.4")
 logger = logging.getLogger(__name__)
 

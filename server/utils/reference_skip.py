@@ -193,12 +193,12 @@ def find_reference_paragraph_ids(document) -> frozenset[int]:
 
 def _plan_for(document) -> frozenset[int]:
     """Share one decision between terminology and translation for a document."""
-    previous = getattr(document, "_zotero_reference_skip_ids", None)
+    previous = getattr(document, "_pdf_reference_skip_ids", None)
     if previous is not None:
         return previous
     ids = find_reference_paragraph_ids(document)
     try:
-        document._zotero_reference_skip_ids = ids
+        document._pdf_reference_skip_ids = ids
     except (AttributeError, TypeError):
         pass  # Some IL implementations may forbid extra attributes.
     return ids
@@ -264,15 +264,15 @@ def install_reference_skip_policy():
     original_term_page = AutomaticTermExtractor.process_page
 
     def translate(translator, docs):
-        translator._zotero_reference_skip_ids = _plan_for(docs)
+        translator._pdf_reference_skip_ids = _plan_for(docs)
         try:
             return original_translate(translator, docs)
         finally:
-            translator.__dict__.pop("_zotero_reference_skip_ids", None)
+            translator.__dict__.pop("_pdf_reference_skip_ids", None)
 
     def should_translate(translator, paragraph, *args, **kwargs):
         if id(paragraph) in getattr(
-            translator, "_zotero_reference_skip_ids", ()
+            translator, "_pdf_reference_skip_ids", ()
         ):
             return False
         return original_should(translator, paragraph, *args, **kwargs)
@@ -281,7 +281,7 @@ def install_reference_skip_policy():
         translator, page, executor, pbar=None, tracker=None,
         executor2=None, translated_ids=None,
     ):
-        skip_ids = getattr(translator, "_zotero_reference_skip_ids", ())
+        skip_ids = getattr(translator, "_pdf_reference_skip_ids", ())
         to_skip = [
             p for p in page.pdf_paragraph
             if id(p) in skip_ids
@@ -310,14 +310,14 @@ def install_reference_skip_policy():
         )
 
     def plain_translate(translator, docs):
-        translator._zotero_reference_skip_ids = _plan_for(docs)
+        translator._pdf_reference_skip_ids = _plan_for(docs)
         try:
             return original_plain_translate(translator, docs)
         finally:
-            translator.__dict__.pop("_zotero_reference_skip_ids", None)
+            translator.__dict__.pop("_pdf_reference_skip_ids", None)
 
     def plain_page(translator, page, executor, pbar=None, tracker=None):
-        skip_ids = getattr(translator, "_zotero_reference_skip_ids", ())
+        skip_ids = getattr(translator, "_pdf_reference_skip_ids", ())
         to_skip = [p for p in page.pdf_paragraph if id(p) in skip_ids]
         if not to_skip:
             return original_plain_page(translator, page, executor, pbar, tracker)
@@ -333,14 +333,14 @@ def install_reference_skip_policy():
         )
 
     def term_run(extractor, docs):
-        extractor._zotero_reference_skip_ids = _plan_for(docs)
+        extractor._pdf_reference_skip_ids = _plan_for(docs)
         try:
             return original_term_run(extractor, docs)
         finally:
-            extractor.__dict__.pop("_zotero_reference_skip_ids", None)
+            extractor.__dict__.pop("_pdf_reference_skip_ids", None)
 
     def term_page(extractor, page, executor, pbar=None, tracker=None):
-        skip_ids = getattr(extractor, "_zotero_reference_skip_ids", ())
+        skip_ids = getattr(extractor, "_pdf_reference_skip_ids", ())
         to_skip = [
             p for p in page.pdf_paragraph if id(p) in skip_ids
         ]

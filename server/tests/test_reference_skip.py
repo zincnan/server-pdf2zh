@@ -78,7 +78,7 @@ class ReferenceRegionTests(unittest.TestCase):
         self.assertNotIn(id(doc.page[2].pdf_paragraph[0]), ids)
 
     def test_unknown_version_fails_closed(self):
-        with patch("importlib.metadata.version", return_value="0.6.2"):
+        with patch("utils.reference_skip.version", return_value="0.6.2"):
             self.assertFalse(reference_skip.policy_supported())
 
     def test_reference_only_command_and_original_legacy_path(self):
@@ -86,7 +86,7 @@ class ReferenceRegionTests(unittest.TestCase):
         self.assertIs(table_runtime.prepare_table_runtime_command(old), old)
         command = [
             sys.executable, "-m", "pdf2zh_next", "file.pdf",
-            "--zotero-reference-skip",
+            "--skip-references-policy",
         ]
         wrapped = table_runtime.prepare_table_runtime_command(command)
         self.assertEqual(wrapped[:3], [
@@ -96,22 +96,16 @@ class ReferenceRegionTests(unittest.TestCase):
         ])
         self.assertEqual(
             wrapped[3:],
-            ["none", "--zotero-reference-skip", "file.pdf"],
+            ["none", "--skip-references-policy", "file.pdf"],
         )
         both = table_runtime.prepare_table_runtime_command(
-            command + ["--zotero-table-mode", "fixed"]
+            command + ["--table-policy", "fixed"]
         )
-        self.assertEqual(both[3:5], ["fixed", "--zotero-reference-skip"])
+        self.assertEqual(both[3:5], ["fixed", "--skip-references-policy"])
 
-    def test_reference_pref_off_for_old_requests_and_legacy_engine(self):
-        with patch("sys.stdout", new_callable=__import__("io").StringIO):
-            self.assertFalse(Config({"engine": "pdf2zh_next"}).skip_references)
-            self.assertFalse(Config({
-                "engine": "pdf2zh", "skipReferences": "true"
-            }).skip_references)
-            self.assertTrue(Config({
-                "engine": "pdf2zh_next", "skipReferences": "true"
-            }).skip_references)
+    def test_reference_option_defaults_off_and_can_be_enabled(self):
+        self.assertFalse(Config({}).skip_references)
+        self.assertTrue(Config({"skipReferences": True}).skip_references)
 
 
 class HookLifecycleTests(unittest.TestCase):

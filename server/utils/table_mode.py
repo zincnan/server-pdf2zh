@@ -12,15 +12,3 @@ def parse_table_mode(value):
             "Adaptive table layout is not implemented yet."
         )
     return value
-
-
-def validate_table_runtime(mode, *, engine, winexe=False):
-    if mode is None:
-        return
-    if engine != "pdf2zh_next":
-        raise ValueError("Table modes require the pdf2zh_next Python engine.")
-    if winexe:
-        raise ValueError(
-            "Table modes require the Python engine; disable enable_winexe. "
-            "The standalone executable does not support the table adapter."
-        )

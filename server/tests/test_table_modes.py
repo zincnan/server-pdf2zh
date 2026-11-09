@@ -19,34 +19,14 @@ from utils.config import Config
 
 
 class TableModeTests(unittest.TestCase):
-    def setUp(self):
-        output = redirect_stdout(StringIO())
-        output.__enter__()
-        self.addCleanup(output.__exit__, None, None, None)
-
-    def test_table_switch_overwrites_previous_persisted_setting(self):
+    def test_task_config_does_not_inherit_another_tasks_table_switch(self):
         with tempfile.TemporaryDirectory() as temp:
-            path = Path(temp) / "config.toml"
-            for enabled, mode, expected_ocr in (
-                (False, None, False),
-                (True, None, True),
-                (True, "fixed", False),
-                (True, "preserve", False),
-            ):
+            profile = {"provider": "openai", "apiKey": "", "apiUrl": "", "model": "", "extraData": {}}
+            for enabled, mode, expected in [(False, "", False), (True, "", True), (True, "fixed", False), (True, "preserve", False)]:
                 with self.subTest(enabled=enabled, mode=mode):
-                    path.write_text(
-                        "[pdf]\ntranslate_table_text = true\n", encoding="utf-8"
-                    )
-                    request = {
-                        "engine": "pdf2zh_next",
-                        "next_service": "openai",
-                        "translateTableText": enabled,
-                        "tableMode": mode,
-                    }
-                    Config(request).update_config_file(path)
-                    self.assertIs(
-                        toml.load(path)["pdf"]["translate_table_text"], expected_ocr
-                    )
+                    path = Path(temp) / "config.toml"
+                    Config({"translateTableText": enabled, "tableMode": mode}).write(profile, path, Path(temp))
+                    self.assertIs(toml.load(path)["pdf"]["translate_table_text"], expected)
 
 
 class TableProcessTests(unittest.TestCase):

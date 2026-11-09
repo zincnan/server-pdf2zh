@@ -1,15 +1,7 @@
-# Known Server errors and Chinese hints
+# 错误与诊断
 
-The Server error classifier is intentionally conservative. It never replaces
-the raw exception or traceback, only adds an explanation for known signatures.
-Plugin-side fallback rules mirror the same codes.
+任务保留用户可读错误分类：模型认证失败、请求限流、PDF 缺少文字层，以及依赖导入异常等。分类只补充解释，不将未知错误假装成已知错误。
 
-- PDF_UNREADABLE_TEXT: no extractable PDF text / unreadable CID data.
-- BITSTRING_INCOMPATIBLE: the actual BitStream import failure from issue #366.
-  Use the read-only manage_packages.py doctor command; the expected bitstring
-  range is >=4.3.0,<5.
-- API_RATE_LIMIT: HTTP 429 or rate_limit_exceeded. Check quota and concurrency.
-- API_AUTH_FAILED: explicit invalid_api_key / 401 Unauthorized.
+任务日志最多约 2 MiB，保存在任务目录，Clear 后一并删除。API Key 与敏感扩展字段在写入前脱敏。各任务持有独立输出缓冲，不共享全局“最后一次错误”。
 
-Unknown errors remain unknown. Add new rules only with reproducible log
-signatures, paired Python / TypeScript tests, and preservation of the raw error.
+依赖问题请重新构建固定版本镜像。模型错误请编辑模型服务配置，并用当前激活配置重新翻译。磁盘不足或目录权限错误需先解决存储问题，再重试或清理任务。

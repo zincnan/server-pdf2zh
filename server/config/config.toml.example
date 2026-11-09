@@ -1,10 +1,10 @@
-# Schema baseline: pdf2zh_next 2.9.0. Zotero PDF2zh intentionally keeps
+# Schema baseline: pdf2zh_next 2.9.0. This Web service keeps
 # product-safe defaults (for example DeepSeek V4 instead of deprecated aliases,
 # no-watermark output, and zh-CN target language) rather than copying every
 # upstream runtime default verbatim.
 config_file = "null"
 report_interval = 0.2
-siliconflowfree = true  # 初始化为siliconFlow, 免费翻译
+siliconflowfree = false  # A task explicitly enables its active provider
 openai = false
 aliyundashscope = false
 google = false
@@ -26,8 +26,6 @@ grok = false
 groq = false
 qwenmt = false
 openaicompatible = false
-claudecode = false
-clitranslator = false
 term_siliconflowfree = false
 term_openai = false
 term_aliyundashscope = false
@@ -94,16 +92,6 @@ no_remove_non_formula_lines = false
 non_formula_line_iou_threshold = 0.9
 figure_table_protection_threshold = 0.9
 skip_formula_offset_calculation = false
-
-[gui_settings]
-share = false
-auth_file = "null"
-welcome_page = "null"
-enabled_services = "null"
-disable_gui_sensitive_input = false
-disable_config_auto_save = false
-server_port = 7860
-ui_lang = "zh"
 
 [siliconflowfree_detail]
 translate_engine_type = "SiliconFlowFree"
@@ -254,18 +242,6 @@ openai_compatible_reasoning_effort = "null"
 openai_compatible_send_temperature = "null"
 openai_compatible_send_reasoning_effort = "null"
 openai_compatible_enable_json_mode = "null"
-
-[claudecode_detail]
-translate_engine_type = "ClaudeCode"
-claude_code_path = "claude"
-claude_code_model = "sonnet"
-
-[clitranslator_detail]
-translate_engine_type = "CLITranslator"
-support_llm = "no"
-clitranslator_command = ""
-clitranslator_timeout = 60
-clitranslator_postprocess_command = "null"
 
 [term_siliconflowfree_detail]
 translate_engine_type = "SiliconFlowFree"

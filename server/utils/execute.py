@@ -1,805 +1,134 @@
-import os
+"""Linux PTY execution and progress parsing retained from the original service.
+
+All mutable output, process and progress state belongs to one task context.
+"""
 import codecs
+import collections
+import os
+import pty
 import re
 import select
+import signal
+import struct
 import subprocess
-import sys
-import threading
-from datetime import datetime
+import termios
+import fcntl
 
-from utils.deepseek_thinking import prepare_deepseek_runtime_command
-from utils.table_runtime import prepare_table_runtime_command
-
-import collections
-import threading as _threading
-
-# 引擎输出的尾部行缓冲: 错误分类和无产物诊断的数据源。
-# 引擎输出本身仍完整直写终端, 这里只保留最后若干行供程序化读取。
-_ENGINE_TAIL = collections.deque(maxlen=120)
-_ENGINE_TAIL_LOCK = _threading.Lock()
+ANSI = re.compile(r'\x1b\][^\x07]*(?:\x07|\x1b\\)|\x1b\[[0-?]*[ -/]*[@-~]')
+MAIN_PROGRESS_RE = re.compile(r'\btranslate\s+[^a-z\(\)\r\n]*?(\d+)/(\d+)\b', re.I)
+STEP_PROGRESS_RE = re.compile(r'(.+?)\(\d+/\d+\)\s+.*?(\d+)/(\d+)')
 
 
-def _record_engine_text(text):
-    for line in str(text or '').splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        with _ENGINE_TAIL_LOCK:
-            _ENGINE_TAIL.append(line)
+def clean_text(text):
+    return re.sub(r'[\x00-\x08\x0b-\x1f\x7f]', '', ANSI.sub('', text))
 
 
-def recent_engine_output(n=40):
-    """最近一次(或多次)引擎运行输出的尾部行, 供错误解读与诊断。"""
-    with _ENGINE_TAIL_LOCK:
-        items = list(_ENGINE_TAIL)
-    return '\n'.join(items[-n:])
+def parse_progress(text):
+    text = clean_text(text)
+    match = MAIN_PROGRESS_RE.search(text)
+    if match:
+        current, total = map(int, match.groups())
+        if total:
+            return {'progress': min(99, int(current / total * 100)), 'message': f'翻译 {current}/{total}'}
+    match = STEP_PROGRESS_RE.search(text)
+    if match:
+        return {'message': match.group(1).strip()[:240]}
+    return {}
 
 
-# rich 的 ANSI 颜色/超链接/光标控制序列, 展示给用户前要清除。
-_ANSI_CSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
-_ANSI_OSC_RE = re.compile(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)")
-_CONTROL_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
+class TaskLog:
+    def __init__(self, path, profile):
+        self.path = path
+        self.lines = collections.deque(maxlen=120)
+        self.secrets = [str(profile.get('apiKey', ''))]
+        from utils.services import is_secret
+        self.secrets += [str(v) for k, v in profile.get('extraData', {}).items() if is_secret(k)]
+        self.secrets = sorted((s for s in self.secrets if s), key=len, reverse=True)
+
+    def redact(self, text):
+        text = clean_text(str(text))
+        for secret in self.secrets:
+            text = text.replace(secret, '[REDACTED]')
+        # Some SDKs print a URL query containing a credential.
+        text = re.sub(r'(?i)([?&](?:key|api_key|token|access_token)=)[^\s&]+', r'\1[REDACTED]', text)
+        return text
+
+    def write(self, text):
+        text = self.redact(text)
+        for line in text.splitlines():
+            if line.strip():
+                self.lines.append(line[:1000])
+        # Bound on-disk diagnostic data, without forwarding PDF text to stdout.
+        if self.path.exists() and self.path.stat().st_size > 2 * 1024 * 1024:
+            self.path.write_text('\n'.join(self.lines), encoding='utf-8')
+        with self.path.open('a', encoding='utf-8') as stream:
+            stream.write(text)
+            if not text.endswith('\n'):
+                stream.write('\n')
+
+    def tail(self):
+        return '\n'.join(list(self.lines)[-12:])[-4000:]
 
 
-_OSC_LEFTOVER_RE = re.compile(r"\]?8;;[^ ]*")
-
-
-def _clean_engine_line(line: str) -> str:
-    line = _ANSI_OSC_RE.sub("", line)
-    line = _ANSI_CSI_RE.sub("", line)
-    line = _CONTROL_RE.sub("", line)
-    line = _OSC_LEFTOVER_RE.sub("", line)
-    return " ".join(line.split()).strip()
-
-
-def engine_tail_for_error(max_lines: int = 5) -> str:
-    """给用户看的引擎尾部: 只保留真正的错误行, 去掉进度条与转义码。"""
-    with _ENGINE_TAIL_LOCK:
-        items = list(_ENGINE_TAIL)
-    picked = []
-    for raw in reversed(items):
-        if len(picked) >= max_lines:
-            break
-        cleaned = _clean_engine_line(raw)
-        if not cleaned:
-            continue
-        lower = cleaned.lower()
-        is_progress = ("━" in cleaned or "█" in cleaned) and "error" not in lower
-        if is_progress:
-            continue
-        if ("error" in lower or "traceback" in lower or
-                "exception" in lower or "warning" in lower):
-            picked.append(cleaned[:240])
-    return "\n".join(reversed(picked))
-from utils.environment_lifecycle import managed_python_env
-from utils.task_manager import task_manager
-
-# Match lines like: "translate ... 10/100"
-# MAIN_PROGRESS_RE = re.compile(r"\btranslate\b[^\r\n]*?(\d+)/(\d+)\b", re.IGNORECASE)
-
-# pdf2zh_next
-# 核心修改：在 translate 和 分数 之间，严禁出现英文字母 (a-z) 和括号
-# 这样就能完美避开类似 "Translate Paragraphs (1/1)" 这种子任务。
-MAIN_PROGRESS_RE = re.compile(
-    r"\btranslate\s+[^a-z\(\)\r\n]*?(\d+)/(\d+)\b", 
-    re.IGNORECASE
-)
-
-# Match step-like lines where only status message should be updated
-STEP_PROGRESS_RE = re.compile(r"(.+?)\(\d+/\d+\)\s+.*?(\d+)/(\d+)")
-
-# Legacy pdf2zh (1.x) progress format
-LEGACY_PROGRESS_RE = re.compile(r"(?:translate|Running|Parse).*?(\d+)/(\d+)", re.IGNORECASE)
-
-# Strip ANSI sequences before regex matching
-ANSI_ESCAPE = re.compile(r"(?:\x1B[@-_]|[\x80-\x9F])[0-?]*[ -/]*[@-~]")
-
-
-# 🌟 新增：专门针对 pdf2zh (tqdm) 进度条的精准捕获！
-# 特征：匹配竖线 "|" 加上 " 3/17 [" 这样的格式
-PDF2ZH_TQDM_RE = re.compile(r"\|\s*(\d+)/(\d+)\s+\[")
-
-WINDOWS_MONITOR_INTERVAL = 0.05
-WINDOWS_CONSOLE_SCAN_ROWS = 220
-# Floor only. Never report a fake wide terminal (e.g. 200): rich/tqdm will
-# draw a line that wraps on the real console, and in-place updates turn into
-# duplicated progress spam. Web progress parsing still works because the
-# `translate x/y` token stays on one logical line when COLUMNS matches reality.
-
-# DEBUG_PROGRESS_LOG_PATH = os.path.join(
-#     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-#     "_debug_progress.log",
-# )
-# _DEBUG_PROGRESS_LOG_LOCK = threading.Lock()
-
-
-# def _debug_progress_log(stage, **fields):
-#     try:
-#         ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
-#         parts = []
-#         for key in sorted(fields.keys()):
-#             value = str(fields[key]).replace("\r", "\\r").replace("\n", "\\n")
-#             if len(value) > 260:
-#                 value = value[:260] + "..."
-#             parts.append(f"{key}={value}")
-#         line = f"[{ts}] [{stage}] " + " ".join(parts)
-#         with _DEBUG_PROGRESS_LOG_LOCK:
-#             with open(DEBUG_PROGRESS_LOG_PATH, "a", encoding="utf-8", errors="replace") as fp:
-#                 fp.write(line + "\n")
-#     except Exception:
-#         pass
-
-
-def _windows_visible_console_size():
-    """Visible window size, not the (often much wider) screen buffer."""
-    if sys.platform != "win32":
-        return None
+def terminate_process(process):
     try:
-        import ctypes
-        from ctypes import wintypes
-
-        class COORD(ctypes.Structure):
-            _fields_ = [("X", wintypes.SHORT), ("Y", wintypes.SHORT)]
-
-        class SMALL_RECT(ctypes.Structure):
-            _fields_ = [
-                ("Left", wintypes.SHORT),
-                ("Top", wintypes.SHORT),
-                ("Right", wintypes.SHORT),
-                ("Bottom", wintypes.SHORT),
-            ]
-
-        class CONSOLE_SCREEN_BUFFER_INFO(ctypes.Structure):
-            _fields_ = [
-                ("dwSize", COORD),
-                ("dwCursorPosition", COORD),
-                ("wAttributes", wintypes.WORD),
-                ("srWindow", SMALL_RECT),
-                ("dwMaximumWindowSize", COORD),
-            ]
-
-        kernel32 = ctypes.windll.kernel32
-        handle = kernel32.GetStdHandle(-11)
-        if handle in (None, 0, ctypes.c_void_p(-1).value):
-            return None
-        csbi = CONSOLE_SCREEN_BUFFER_INFO()
-        if not kernel32.GetConsoleScreenBufferInfo(handle, ctypes.byref(csbi)):
-            return None
-        win = csbi.srWindow
-        width = int(win.Right - win.Left + 1)
-        height = int(win.Bottom - win.Top + 1)
-        if width > 0 and height > 0:
-            return width, height
-    except Exception:
-        return None
-    return None
-
-
-def _detect_terminal_size(default_cols=80, default_rows=24):
-    """Size of the terminal the user actually sees."""
-    cols, rows = default_cols, default_rows
-    visible = _windows_visible_console_size()
-    if visible:
-        cols, rows = visible
-    else:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    try:
+        process.wait(timeout=3)
+    except subprocess.TimeoutExpired:
         try:
-            size = os.get_terminal_size()
-            if size.columns > 0:
-                cols = size.columns
-            if size.lines > 0:
-                rows = size.lines
-        except (OSError, ValueError, AttributeError):
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
             pass
-    return max(40, int(cols)), max(10, int(rows))
+        process.wait()
 
 
-def _apply_terminal_size_env(env, cols, rows):
-    env["COLUMNS"] = str(cols)
-    env["LINES"] = str(rows)
-
-
-def _child_terminal_size(cols, rows):
-    # POSIX terminals wrap when a line uses every column. rich then emits
-    # another update with \r, which only returns to the wrapped line, so
-    # `translate` appears to reprint. Draw one column narrower than the
-    # parent tty so in-place updates stay on one row.
-    return max(40, int(cols) - 1), max(10, int(rows))
-
-
-def _decode_pty_utf8(data, leftover):
-    decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
-    text = decoder.decode(leftover + data, final=False)
-    return text, decoder.getstate()[0]
-
-
-def _write_pty_chunk(data, leftover, task_id):
+def execute_with_progress(command, directory, env, update, register, log, stopping):
+    master, slave = pty.openpty()
+    fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 40, 140, 0, 0))
+    process = None
+    decoder = codecs.getincrementaldecoder('utf-8')(errors='replace')
+    pending = ''
     try:
-        sys.stdout.buffer.write(data)
-        sys.stdout.buffer.flush()
-    except Exception:
-        text, leftover = _decode_pty_utf8(data, leftover)
-        sys.stdout.write(text)
-        sys.stdout.flush()
-        _parse_progress(text, task_id)
-        _record_engine_text(text)
-        return leftover
-    text, leftover = _decode_pty_utf8(data, leftover)
-    _parse_progress(text, task_id)
-    _record_engine_text(text)
-    return leftover
-
-
-def execute_with_progress(cmd, task_id, args, env_manager):
-    """Execute translation command and update task progress in real time."""
-    final_cmd = cmd
-    final_env = os.environ.copy()
-    final_env["PYTHONUNBUFFERED"] = "1"
-    final_env["FORCE_COLOR"] = "1"
-    final_env["FORCE_TERMINAL"] = "1"
-    final_env.pop("NO_COLOR", None)
-    final_env["TERM"] = "xterm-256color"
-
-    cols, rows = _detect_terminal_size()
-    child_cols, child_rows = _child_terminal_size(cols, rows)
-    _apply_terminal_size_env(final_env, child_cols, child_rows)
-
-    if args.enable_venv and env_manager:
-        venv_cmd, venv_env = env_manager.get_command_and_env(cmd)
-        final_cmd = venv_cmd
-        final_env.update(venv_env)
-        final_env = managed_python_env(final_env)
-        # venv env is copied from os.environ and would undo COLUMNS/LINES.
-        _apply_terminal_size_env(final_env, child_cols, child_rows)
-
-    # DeepSeek V4 is special: the plugin stores the user's choice in generic
-    # extraData, while pdf2zh_next 2.9+ exposes that choice as explicit CLI
-    # flags. Validate the exact runtime that will be executed, then add those
-    # flags before any translation/API request begins.
-    final_cmd = prepare_deepseek_runtime_command(final_cmd, final_env)
-    final_cmd = prepare_table_runtime_command(final_cmd)
-
-    print(f"[execute_with_progress] {' '.join(final_cmd)}\n")
-
-    if sys.platform != "win32":
-        _execute_with_pty(final_cmd, final_env, task_id, child_cols, child_rows)
-    else:
-        _execute_with_inherit(final_cmd, final_env, task_id, cols)
-
-def _parse_progress(text, task_id):
-    """Parse progress info from text and update task_manager."""
-    if task_id is None:
-        return
-
-    clean = ANSI_ESCAPE.sub("", text)
-    
-    # 【新增调试日志】把每次 PTY 读取到的"大块头"文本极其原貌（包括 \r 和 \n）打出来
-    # _debug_progress_log("MAC_PTY_READ", raw_chunk=repr(clean))
-
-    # 以下完全恢复成你的原始代码！
-    # Main translation progress (preferred)
-    match = MAIN_PROGRESS_RE.search(clean)
-    if match:
-        curr, total = int(match.group(1)), int(match.group(2))
-        if total > 0:
-            pct = int((curr / total) * 100)
-            task_manager.update_task(task_id, {
-                "progress": pct,
-                "status": "running",
-                "message": f"translate {curr}/{total}",
-            })
-            # 【新增调试日志】记录 Main 正则抓到了什么
-            # _debug_progress_log("MATCH_MAIN", curr=curr, total=total, pct=pct)
-        return
-
-    # Step status text (secondary)
-    match = STEP_PROGRESS_RE.search(clean)
-    if match:
-        step_name = match.group(1).strip()
-        task_manager.update_task(task_id, {
-            "status": "running",
-            "message": step_name,
-        })
-        # 【新增调试日志】
-        # _debug_progress_log("MATCH_STEP", step=step_name)
-        return
-
-    # 🌟 3. 处理 pdf2zh 原生引擎的 tqdm 进度条
-    tqdm_matches = PDF2ZH_TQDM_RE.findall(clean)
-    if tqdm_matches:
-        curr, total = int(tqdm_matches[-1][0]), int(tqdm_matches[-1][1])
-        if total > 0:
-            task_manager.update_task(task_id, {
-                "progress": int((curr / total) * 100),
-                "status": "running",
-                "message": f"translate {curr}/{total}",
-            })
-            return
-
-    # Legacy format
-    match = LEGACY_PROGRESS_RE.search(clean)
-    if match:
-        curr, total = int(match.group(1)), int(match.group(2))
-        if total > 0:
-            pct = int((curr / total) * 100)
-            task_manager.update_task(task_id, {
-                "progress": pct,
-                "status": "running",
-            })
-            # 【新增调试日志】记录 Legacy 正则是不是抓错了
-            # _debug_progress_log("MATCH_LEGACY", curr=curr, total=total, pct=pct)
-
-# def _parse_progress(text, task_id):
-#     """Parse progress info from text and update task_manager."""
-#     if task_id is None:
-#         return
-
-#     clean = ANSI_ESCAPE.sub("", text)
-
-#     # Main translation progress (preferred)
-#     # 子步骤状态文本 (次要)
-#     # 子步骤状态文本 (次要)
-#     match = STEP_PROGRESS_RE.search(clean)
-#     if match:
-#         # 只提取当前正在做什么，比如 "Parse PDF and Create Intermediate Representation"
-#         step_name = match.group(1).strip() 
-        
-#         # ⚠️ 绝对不要在这里计算和更新 progress！只更新 message！
-#         task_manager.update_task(task_id, {
-#             "status": "running",
-#             "message": step_name,
-#         })
-#         return
-
-#     # Step status text (secondary)
-#     match = STEP_PROGRESS_RE.search(clean)
-#     if match:
-#         step_name = match.group(1).strip()
-#         task_manager.update_task(task_id, {
-#             "status": "running",
-#             "message": step_name,
-#         })
-#         return
-
-#     # Legacy format
-#     match = LEGACY_PROGRESS_RE.search(clean)
-#     if match:
-#         curr, total = int(match.group(1)), int(match.group(2))
-#         if total > 0:
-#             pct = int((curr / total) * 100)
-#             task_manager.update_task(task_id, {
-#                 "progress": pct,
-#                 "status": "running",
-#             })
-
-
-def _execute_with_pty(final_cmd, final_env, task_id, cols, rows):
-    """macOS/Linux: run command in PTY and parse progress from stream."""
-    import pty
-
-    master_fd, slave_fd = pty.openpty()
-
-    try:
-        import fcntl
-        import termios
-        import struct
-
-        winsize = struct.pack("HHHH", int(rows), int(cols), 0, 0)
-        fcntl.ioctl(master_fd, termios.TIOCSWINSZ, winsize)
-    except Exception:
-        pass
-
-    process = subprocess.Popen(
-        final_cmd,
-        stdout=slave_fd,
-        stderr=slave_fd,
-        env=final_env,
-        bufsize=0,
-        close_fds=True,
-    )
-    os.close(slave_fd)
-    leftover = b""
-
-    try:
+        process = subprocess.Popen(command, cwd=directory, env=env, stdout=slave, stderr=slave,
+                                   close_fds=True, start_new_session=True)
+        os.close(slave)
+        slave = None
+        register(process)
         while True:
-            readable, _, _ = select.select([master_fd], [], [], 0.1)
-            if master_fd in readable:
+            if stopping.is_set():
+                raise InterruptedError('服务正在停止，任务可在重启后手动重试')
+            ready, _, _ = select.select([master], [], [], 0.2)
+            if ready:
                 try:
-                    data = os.read(master_fd, 4096)
-                    if not data:
-                        break
-                    leftover = _write_pty_chunk(data, leftover, task_id)
+                    data = os.read(master, 8192)
                 except OSError:
                     break
-
-            if process.poll() is not None:
-                try:
-                    import fcntl as _fcntl
-
-                    fl = _fcntl.fcntl(master_fd, _fcntl.F_GETFL)
-                    _fcntl.fcntl(master_fd, _fcntl.F_SETFL, fl | os.O_NONBLOCK)
-                    while True:
-                        data = os.read(master_fd, 4096)
-                        if not data:
-                            break
-                        leftover = _write_pty_chunk(data, leftover, task_id)
-                except Exception:
-                    pass
+                if not data:
+                    break
+                pending += decoder.decode(data)
+                segments = re.split(r'[\r\n]', pending)
+                pending = segments.pop()[-16000:]
+                for line in segments:
+                    if line.strip():
+                        log.write(line)
+                        values = parse_progress(line)
+                        if values:
+                            update(**values)
+            elif process.poll() is not None:
                 break
-
-        os.close(master_fd)
+        pending += decoder.decode(b'', final=True)
+        if pending:
+            log.write(pending)
         return_code = process.wait()
-        if return_code != 0:
-            raise subprocess.CalledProcessError(
-                return_code, final_cmd, stderr=recent_engine_output()
-            )
-
-    except Exception:
-        if process.poll() is None:
-            process.kill()
-        try:
-            os.close(master_fd)
-        except Exception:
-            pass
-        raise
-
-
-def _monitor_windows_console_translate_progress(task_id, stop_event):
-    """
-    Windows-only monitor:
-    Read console buffer and parse only "translate ... x/y".
-    This keeps native progress bars untouched while enabling SSE updates.
-    """
-    if task_id is None:
-        return
-
-    try:
-        import ctypes
-        from ctypes import wintypes
-    except Exception:
-        # _debug_progress_log("MONITOR_IMPORT_ERROR", task_id=task_id)
-        return
-
-    STD_OUTPUT_HANDLE = -11
-    INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
-
-    class COORD(ctypes.Structure):
-        _fields_ = [
-            ("X", wintypes.SHORT),
-            ("Y", wintypes.SHORT),
-        ]
-
-    class SMALL_RECT(ctypes.Structure):
-        _fields_ = [
-            ("Left", wintypes.SHORT),
-            ("Top", wintypes.SHORT),
-            ("Right", wintypes.SHORT),
-            ("Bottom", wintypes.SHORT),
-        ]
-
-    class CONSOLE_SCREEN_BUFFER_INFO(ctypes.Structure):
-        _fields_ = [
-            ("dwSize", COORD),
-            ("dwCursorPosition", COORD),
-            ("wAttributes", wintypes.WORD),
-            ("srWindow", SMALL_RECT),
-            ("dwMaximumWindowSize", COORD),
-        ]
-
-    try:
-        kernel32 = ctypes.windll.kernel32
-
-        get_std_handle = kernel32.GetStdHandle
-        get_std_handle.argtypes = [wintypes.DWORD]
-        get_std_handle.restype = wintypes.HANDLE
-
-        get_csbi = kernel32.GetConsoleScreenBufferInfo
-        get_csbi.restype = wintypes.BOOL
-
-        read_console = kernel32.ReadConsoleOutputCharacterW
-        read_console.argtypes = [
-            wintypes.HANDLE,
-            wintypes.LPWSTR,
-            wintypes.DWORD,
-            COORD,
-            ctypes.POINTER(wintypes.DWORD),
-        ]
-        read_console.restype = wintypes.BOOL
-    except Exception as e:
-        # _debug_progress_log("MONITOR_WINAPI_ERROR", task_id=task_id, error=str(e))
-        return
-
-    handle = get_std_handle(STD_OUTPUT_HANDLE)
-    if handle in (None, 0, INVALID_HANDLE_VALUE):
-        # _debug_progress_log("MONITOR_HANDLE_INVALID", task_id=task_id)
-        return
-
-    # _debug_progress_log("MONITOR_STARTED", task_id=task_id)
-
-    locked_total = None
-    last_curr = None
-    last_row = None
-    last_step = None
-    idle_ticks = 0
-    last_error = ""
-
-    while not stop_event.is_set():
-        try:
-            csbi = CONSOLE_SCREEN_BUFFER_INFO()
-            if not get_csbi(handle, ctypes.byref(csbi)):
-                print("⚠️ 无法读取 Windows 控制台缓冲区（stdout 可能已重定向）；控制台进度监视已停止，翻译进程继续运行。")
-                break
-
-            width = max(int(csbi.dwSize.X), 1)
-            buffer_rows = max(int(csbi.dwSize.Y), 1)
-            cursor_y = int(csbi.dwCursorPosition.Y)
-
-            start_row = max(0, cursor_y - WINDOWS_CONSOLE_SCAN_ROWS)
-            end_row = min(buffer_rows - 1, cursor_y + 2)
-            if end_row < start_row:
-                start_row, end_row = 0, min(buffer_rows - 1, WINDOWS_CONSOLE_SCAN_ROWS)
-
-            pair_candidates = []
-            latest_step = None
-            latest_step_row = -1
-            translate_line_sample = None
-
-            for row in range(start_row, end_row + 1):
-                buf = ctypes.create_unicode_buffer(width)
-                chars_read = wintypes.DWORD(0)
-                ok = read_console(
-                    handle,
-                    buf,
-                    width,
-                    COORD(0, row),
-                    ctypes.byref(chars_read),
-                )
-                if not ok or chars_read.value <= 0:
-                    continue
-
-                line = buf.value[: chars_read.value].strip()
-                if not line:
-                    continue
-
-                if translate_line_sample is None and "translate" in line.lower():
-                    translate_line_sample = line[:220]
-
-                step_m = STEP_PROGRESS_RE.search(line)
-                if step_m and row >= latest_step_row:
-                    latest_step = step_m.group(1).strip()
-                    latest_step_row = row
-
-                m = MAIN_PROGRESS_RE.search(line)
-                if not m:
-                    continue
-
-                curr, total = int(m.group(1)), int(m.group(2))
-                if total <= 0:
-                    continue
-                if locked_total is not None and total != locked_total:
-                    continue
-
-                pair_candidates.append((row, curr, total))
-
-            if pair_candidates:
-                idle_ticks = 0
-                if locked_total is None:
-                    max_total = max(c[2] for c in pair_candidates)
-                    pair_candidates = [c for c in pair_candidates if c[2] == max_total]
-                    pair_candidates.sort(key=lambda c: (abs(c[0] - cursor_y), -c[0], -c[1]))
-                    row, curr, total = pair_candidates[0]
-                    locked_total = total
-                    # _debug_progress_log("LOCK_TOTAL", task_id=task_id, row=row, total=total)
-                else:
-                    def _rank(candidate):
-                        row = candidate[0]
-                        dist_prev = abs(row - last_row) if last_row is not None else abs(row - cursor_y)
-                        dist_cursor = abs(row - cursor_y)
-                        return (dist_prev, dist_cursor, -row)
-
-                    pair_candidates.sort(key=_rank)
-                    row, curr, total = pair_candidates[0]
-
-                if last_curr is None or curr >= last_curr:
-                    last_row = row
-                    if last_curr is None or curr != last_curr:
-                        last_curr = curr
-                        # Keep 100% for final completion update only.
-                        pct = 99 if curr >= total else int((curr / total) * 100)
-                        task_manager.update_task(task_id, {
-                            "progress": pct,
-                            "status": "running",
-                            "message": f"translate {curr}/{total}",
-                        })
-                        # _debug_progress_log(
-                        #     "PARSE_PROGRESS",
-                        #     task_id=task_id,
-                        #     row=row,
-                        #     curr=curr,
-                        #     total=total,
-                        #     pct=pct,
-                        #     locked_total=locked_total,
-                        # )
-            else:
-                idle_ticks += 1
-                if idle_ticks % 40 == 0:
-                    pass  # _debug_progress_log(
-                    #     "PARSE_IDLE",
-                    #     task_id=task_id,
-                    #     cursor=cursor_y,
-                    #     start=start_row,
-                    #     end=end_row,
-                    #     locked_total=locked_total,
-                    #     sample=translate_line_sample,
-                    # )
-
-            if latest_step and latest_step != last_step:
-                last_step = latest_step
-                task_manager.update_task(task_id, {
-                    "status": "running",
-                    "message": latest_step,
-                })
-                # _debug_progress_log("PARSE_STEP", task_id=task_id, step=latest_step)
-        except Exception as e:
-            err_text = str(e)
-            if err_text != last_error:
-                last_error = err_text
-                # _debug_progress_log("MONITOR_ERROR", task_id=task_id, error=err_text)
-
-        stop_event.wait(WINDOWS_MONITOR_INTERVAL)
-
-
-def _guard_windows_console_min_width(stop_event, min_cols):
-    """
-    Restore the window width we started with if the user shrinks it mid-run.
-    Do not force a fake 160-column window: that only widens the buffer and
-    makes rich wrap even harder on the visible area.
-    """
-    try:
-        import ctypes
-        from ctypes import wintypes
-    except Exception:
-        return
-
-    STD_OUTPUT_HANDLE = -11
-    INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
-
-    class COORD(ctypes.Structure):
-        _fields_ = [("X", wintypes.SHORT), ("Y", wintypes.SHORT)]
-
-    class SMALL_RECT(ctypes.Structure):
-        _fields_ = [
-            ("Left", wintypes.SHORT),
-            ("Top", wintypes.SHORT),
-            ("Right", wintypes.SHORT),
-            ("Bottom", wintypes.SHORT),
-        ]
-
-    class CONSOLE_SCREEN_BUFFER_INFO(ctypes.Structure):
-        _fields_ = [
-            ("dwSize", COORD),
-            ("dwCursorPosition", COORD),
-            ("wAttributes", wintypes.WORD),
-            ("srWindow", SMALL_RECT),
-            ("dwMaximumWindowSize", COORD),
-        ]
-
-    try:
-        kernel32 = ctypes.windll.kernel32
-
-        get_std_handle = kernel32.GetStdHandle
-        get_std_handle.argtypes = [wintypes.DWORD]
-        get_std_handle.restype = wintypes.HANDLE
-
-        get_csbi = kernel32.GetConsoleScreenBufferInfo
-        get_csbi.restype = wintypes.BOOL
-
-        set_buffer_size = kernel32.SetConsoleScreenBufferSize
-        set_buffer_size.argtypes = [wintypes.HANDLE, COORD]
-        set_buffer_size.restype = wintypes.BOOL
-
-        set_window_info = kernel32.SetConsoleWindowInfo
-        set_window_info.argtypes = [wintypes.HANDLE, wintypes.BOOL, ctypes.POINTER(SMALL_RECT)]
-        set_window_info.restype = wintypes.BOOL
-    except Exception:
-        return
-
-    handle = get_std_handle(STD_OUTPUT_HANDLE)
-    if handle in (None, 0, INVALID_HANDLE_VALUE):
-        return
-
-    while not stop_event.is_set():
-        try:
-            csbi = CONSOLE_SCREEN_BUFFER_INFO()
-            if not get_csbi(handle, ctypes.byref(csbi)):
-                break
-
-            win = csbi.srWindow
-            width = int(win.Right - win.Left + 1)
-            height = int(win.Bottom - win.Top + 1)
-
-            if width < min_cols:
-                max_w = max(int(csbi.dwMaximumWindowSize.X) or min_cols, 1)
-                target_width = min(int(min_cols), max_w)
-                if width >= target_width:
-                    stop_event.wait(0.08)
-                    continue
-                target_height = max(int(csbi.dwSize.Y), height)
-                target_buffer_width = max(int(csbi.dwSize.X), target_width)
-
-                set_buffer_size(handle, COORD(target_buffer_width, target_height))
-
-                new_top = max(0, min(int(win.Top), target_height - height))
-                new_rect = SMALL_RECT(
-                    0,
-                    new_top,
-                    target_width - 1,
-                    new_top + height - 1,
-                )
-                set_window_info(handle, True, ctypes.byref(new_rect))
-        except Exception:
-            pass
-
-        stop_event.wait(0.08)
-
-
-def _execute_with_inherit(final_cmd, final_env, task_id, cols):
-    """
-    Windows: inherit stdout/stderr so terminal keeps native multi-progress UI.
-    Progress parsing is done by a side monitor reading console buffer.
-    """
-    # stdout 保持直通以保留原生进度条; stderr 捕获后原样转发终端,
-    # 同时留一份尾部用于错误解读(引擎报错都走 stderr)。
-    process = subprocess.Popen(
-        final_cmd,
-        stdout=None,
-        stderr=subprocess.PIPE,
-        env=final_env,
-        bufsize=0,
-        text=False,
-    )
-
-    def _drain_stderr():
-        try:
-            for raw in iter(process.stderr.readline, b''):
-                line = raw.decode('utf-8', errors='replace')
-                sys.stderr.write(line)
-                sys.stderr.flush()
-                _record_engine_text(line)
-        except Exception:
-            pass
-
-    stderr_thread = threading.Thread(target=_drain_stderr, daemon=True)
-    stderr_thread.start()
-
-    # _debug_progress_log("EXECUTE_START", task_id=task_id, cmd=" ".join(final_cmd))
-
-    stop_event = threading.Event()
-    monitor_thread = threading.Thread(
-        target=_monitor_windows_console_translate_progress,
-        args=(task_id, stop_event),
-        daemon=True,
-    )
-    monitor_thread.start()
-
-    width_guard_thread = threading.Thread(
-        target=_guard_windows_console_min_width,
-        args=(stop_event, cols),
-        daemon=True,
-    )
-    width_guard_thread.start()
-
-    return_code = None
-    try:
-        return_code = process.wait()
+        if return_code:
+            raise RuntimeError(f'翻译引擎退出，代码 {return_code}\n{log.tail()}')
     finally:
-        stop_event.set()
-        monitor_thread.join(timeout=1.5)
-        width_guard_thread.join(timeout=1.0)
-        stderr_thread.join(timeout=2.0)
-
-    # _debug_progress_log("EXECUTE_END", task_id=task_id, return_code=return_code)
-
-    if return_code != 0:
-        raise subprocess.CalledProcessError(
-            return_code, final_cmd, stderr=recent_engine_output()
-        )
+        if process and process.poll() is None:
+            terminate_process(process)
+        register(None)
+        os.close(master)
+        if slave is not None:
+            os.close(slave)

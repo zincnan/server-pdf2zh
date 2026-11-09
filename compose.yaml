@@ -1,0 +1,32 @@
+services:
+  pdf2zh:
+    build: .
+    image: pdf2zh-web:local
+    init: true
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${PORT:-8890}:8890"
+    environment:
+      PUBLISHED_BIND_ADDRESS: ${BIND_ADDRESS:-127.0.0.1}
+      ACCESS_PASSWORD: ${ACCESS_PASSWORD:-pdf2zh}
+      MAX_CONCURRENT_TASKS: ${MAX_CONCURRENT_TASKS:-2}
+      MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-100}
+      SHUTDOWN_GRACE_SECONDS: ${SHUTDOWN_GRACE_SECONDS:-600}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+    volumes:
+      - pdf2zh-data:/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    stop_grace_period: 620s
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8890/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+volumes:
+  pdf2zh-data:

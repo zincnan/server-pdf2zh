@@ -2,3 +2,4 @@
 .model-checks{margin-top:20px;padding-top:16px;border-top:1px solid var(--line)}#services-warning{margin-top:12px}
 
 @media(max-width:850px){.topbar{gap:10px}.topbar .wordmark{font-size:12px;letter-spacing:.02em}}
+.output-options .check-grid{gap:14px 12px}.output-options .check>span{min-width:0}.output-options .check .field-help{margin-top:3px}.output-options>p{margin-top:12px}

@@ -2,7 +2,8 @@
 const $ = (id) => document.getElementById(id);
 const terminal = new Set(['succeeded', 'failed', 'interrupted', 'cleanup_failed']);
 const stateLabels = {queued: '排队中', running: '翻译中', succeeded: '已完成', failed: '失败', interrupted: '已中断', cleanup_failed: '待清理'};
-const outputLabels = {mono: '译文', dual: '双语', mono_cut: '裁剪译文', dual_cut: '裁剪双语', compare: '左右对照', crop_compare: '裁剪后对照', glossary: '术语表'};
+const outputLabels = {mono: '译文 PDF', dual: '双语 PDF', mono_cut: '裁剪译文', dual_cut: '裁剪双语', compare: '双语 PDF（左右并排）', crop_compare: '裁剪后对照', glossary: '术语表'};
+const visibleOutputs = ['mono', 'dual', 'mono_cut', 'dual_cut', 'crop_compare'];
 const advanced = {transFirst: '译文在前', noWatermark: '不添加水印', ocr: '启用 OCR 兼容', autoOcr: '自动启用 OCR', skipReferences: '跳过参考文献', translateTableText: '原生表格文字翻译', saveGlossary: '导出术语表', disableGlossary: '关闭自动术语提取', ignoreCache: '忽略翻译缓存', skipClean: '跳过 PDF 清理', enhanceCompatibility: '增强兼容性', disableRichTextTranslate: '关闭富文本翻译', onlyIncludeTranslatedPage: '仅包含已翻译页面'};
 let capabilities, serviceData = {activeId: null, services: []}, tasks = [], filter = 'all', events, pollTimer, editing = null, noticeTimer;
 function element(tag, text, className) {const el = document.createElement(tag); if (text !== undefined) el.textContent = text; if (className) el.className = className; return el;}
@@ -18,6 +19,13 @@ async function api(path, options = {}) {
 }
 function showLogin() {events?.close(); clearInterval(pollTimer); $('workspace').hidden = true; $('login-view').hidden = false; $('services-dialog').close(); $('access-password').focus();}
 function actionButton(text, action, className) {const button = element('button', text, className); button.type = 'button'; button.addEventListener('click', async () => {button.disabled = true; try {await action();} catch (error) {notice(error.message, true);} finally {button.disabled = false;}}); return button;}
+function updateOutputControls() {
+  const dual = $('output-dual').checked;
+  $('dual-mode').disabled = !dual;
+  $('dual-layout-help').textContent = !dual ? '勾选“双语 PDF”后可选择布局。'
+    : $('dual-mode').value === 'LR' ? '同一页内左右并排显示原文与译文。'
+    : '原文和译文各占一页，交替排列。';
+}
 async function loadServices() {
   serviceData = await api('/api/model-services');
   const select = $('active-service'); select.replaceChildren();
@@ -148,11 +156,17 @@ function connectEvents() {
 }
 async function enterWorkspace(sessionState) {
   capabilities = await api('/api/capabilities');
+  for (const id of ['source-language', 'target-language']) {
+    const select = $(id), previous = select.value;
+    select.replaceChildren();
+    for (const language of capabilities.languages) {const option = element('option', language.label); option.value = language.code; select.append(option);}
+    select.value = capabilities.languages.some((language) => language.code === previous) ? previous : capabilities.defaults[select.name];
+  }
   $('provider').replaceChildren(); for (const provider of capabilities.providers) {const option = element('option', provider.label); option.value = provider.id; $('provider').append(option);}
   $('advanced-checks').replaceChildren(); for (const [name, label] of Object.entries(advanced)) {const row = element('label', label, 'check'); const checkbox = element('input'); checkbox.type = 'checkbox'; checkbox.name = name; checkbox.checked = capabilities.defaults[name]; row.prepend(checkbox); $('advanced-checks').append(row);}
   $('upload-help').textContent = `每份最大 ${Math.round(capabilities.maxUploadBytes / 1024 / 1024)} MB · 关闭页面后翻译仍会继续`;
   $('login-view').hidden = true; $('workspace').hidden = false; $('logout').hidden = !sessionState.required;
-  editService(null); await loadServices(); await loadTasks(); connectEvents();
+  updateOutputControls(); editService(null); await loadServices(); await loadTasks(); connectEvents();
 }
 $('login-form').addEventListener('submit', async (event) => {event.preventDefault(); try {const state = await api('/api/session', {method: 'POST', body: JSON.stringify({password: $('access-password').value})}); $('access-password').value = ''; await enterWorkspace(state);} catch (error) {$('login-error').textContent = error.message;}});
 $('logout').addEventListener('click', async () => {await api('/api/session', {method: 'DELETE'}); showLogin();});
@@ -181,6 +195,8 @@ $('service-form').addEventListener('submit', async (event) => {
 });
 function showFiles() {$('selected-files').textContent = Array.from($('pdf-files').files).map((f) => `${f.name} (${(f.size / 1024 / 1024).toFixed(1)} MB)`).join('、');}
 $('pdf-files').addEventListener('change', showFiles);
+$('output-dual').addEventListener('change', updateOutputControls);
+$('dual-mode').addEventListener('change', updateOutputControls);
 for (const name of ['dragenter', 'dragover']) $('dropzone').addEventListener(name, (event) => {event.preventDefault(); $('dropzone').classList.add('dragging');});
 for (const name of ['dragleave', 'drop']) $('dropzone').addEventListener(name, (event) => {event.preventDefault(); $('dropzone').classList.remove('dragging'); if (name === 'drop' && event.dataTransfer.files.length) {$('pdf-files').files = event.dataTransfer.files; showFiles();}});
 $('translate-form').addEventListener('submit', async (event) => {
@@ -188,6 +204,7 @@ $('translate-form').addEventListener('submit', async (event) => {
   try {
     const options = {...capabilities.defaults};
     for (const input of $('translate-form').elements) if (input.name in options) options[input.name] = input.type === 'checkbox' ? input.checked : input.type === 'number' ? Number(input.value) : input.value;
+    if (!visibleOutputs.some((name) => options[name])) throw new Error('请至少选择一种输出文件');
     const files = Array.from($('pdf-files').files);
     if (files.some((file) => file.size > capabilities.maxUploadBytes)) throw new Error('有文件超过上传大小限制');
     const failed = []; let submitted = 0;

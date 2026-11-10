@@ -151,6 +151,45 @@ class WebTests(unittest.TestCase):
         self.assertNotIn(self.temp.name, text)
         self.assertNotIn('outputDir', text)
 
+    def test_language_catalog_works_with_request_validation(self):
+        response = self.client.get('/api/capabilities')
+        self.assertEqual(response.status_code, 200)
+        capabilities = response.get_json()
+        languages = capabilities['languages']
+        self.assertEqual(len(languages), 153)
+        codes = [language['code'] for language in languages]
+        self.assertEqual(len(set(codes)), len(codes))
+        self.assertIn(capabilities['defaults']['sourceLang'], codes)
+        self.assertIn(capabilities['defaults']['targetLang'], codes)
+        for language in languages:
+            with self.subTest(code=language['code']):
+                self.assertTrue(language['label'])
+                validate_options({'sourceLang': language['code'], 'targetLang': language['code']})
+        names = {language['code']: language['label'] for language in languages}
+        self.assertEqual(len({names['zh-CN'], names['zh-TW'], names['zh-HK']}), 3)
+        self.assertNotEqual(names['pt'], names['pt-BR'])
+
+    def test_multilingual_jobs_keep_language_codes_in_config_and_retry(self):
+        profile = self.app.extensions['model_services'].active()
+        # Preserve API compatibility for valid codes outside the UI catalog too.
+        for source, target in [('fr', 'zh-CN'), ('ja', 'en'), ('zh-CN', 'de'), ('ar', 'he')]:
+            with self.subTest(source=source, target=target):
+                response = self.submit(options={'sourceLang': source, 'targetLang': target})
+                self.assertEqual(response.status_code, 202)
+                task = wait_for(self.manager, response.json['taskId'])
+                self.assertEqual(task['state'], 'succeeded')
+                options = task['options']
+                path = Path(self.temp.name) / 'language-test.toml'
+                config = Config(options).write(profile, path, Path(self.temp.name) / 'output')
+                self.assertEqual(config['translation']['lang_in'], source)
+                self.assertEqual(config['translation']['lang_out'], target)
+                retried = self.client.post(f'/api/tasks/{task["id"]}/retry', headers=HEADERS)
+                self.assertEqual(retried.status_code, 202)
+                retry = wait_for(self.manager, retried.json['taskId'])
+                self.assertEqual(retry['state'], 'succeeded')
+                self.assertEqual(retry['options']['sourceLang'], source)
+                self.assertEqual(retry['options']['targetLang'], target)
+
     def test_clear_failure_can_be_retried(self):
         task_id = self.submit().json['taskId']
         wait_for(self.manager, task_id)

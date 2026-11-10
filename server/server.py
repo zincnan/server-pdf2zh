@@ -11,6 +11,7 @@ from pathlib import Path
 from flask import Flask, Response, jsonify, request, send_file, session
 from werkzeug.exceptions import HTTPException, RequestEntityTooLarge
 from utils.config import DEFAULTS, validate_options
+from utils.languages import LANGUAGES
 from utils.services import ServiceStore, provider_catalog
 from utils.model_policy import EFFORTS, MODEL_RULES
 from utils.storage import atomic_json, read_json
@@ -141,7 +142,7 @@ def create_app(config=None):
     @app.get('/api/capabilities')
     def capabilities():
         return jsonify(version=__version__, product=PRODUCT_NAME, project=PROJECT_ID, service=SERVICE_NAME,
-                       engine='pdf2zh_next', providers=provider_catalog(), defaults=DEFAULTS,
+                       engine='pdf2zh_next', providers=provider_catalog(), defaults=DEFAULTS, languages=LANGUAGES,
                        modelRules=MODEL_RULES, reasoningEfforts=EFFORTS,
                        maxUploadBytes=app.config['MAX_FILE_BYTES'], concurrency=app.config['MAX_WORKERS'])
 

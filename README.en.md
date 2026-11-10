@@ -20,6 +20,10 @@ Open **http://127.0.0.1:7000**:
 
 The first build needs internet access to download dependencies, fonts, and layout models. Defaults: **2** concurrent jobs, **100 MiB** per PDF, automatic OCR enabled, and automatic glossary extraction disabled.
 
+Output types can be selected together: choosing both **译文 PDF** (translated PDF) and **双语 PDF** (bilingual PDF) produces two files. Bilingual layouts support side-by-side or alternating pages. The crop options split two-column papers into individual columns.
+
+Choose source and target languages from dropdowns with Chinese labels and all 153 language options listed by the engine. Common languages appear first; the default is English → Simplified Chinese. Results depend on the selected model and the engine's font and layout support.
+
 ## Model services
 
 | Type | Required fields |

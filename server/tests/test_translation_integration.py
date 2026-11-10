@@ -28,7 +28,7 @@ class RealTranslationTests(unittest.TestCase):
             def do_POST(self):
                 request = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
                 prompt = request['messages'][-1]['content']
-                calls.append(prompt)
+                calls.append(request)
                 # The engine uses JSON paragraph batches and plain-text fallbacks.
                 content = 'Uebersetzt: ' + prompt.split('Input:\n\n')[-1].split('Now translate the following text:\n\n')[-1]
                 for offset in reversed([i for i, char in enumerate(prompt) if char == '[']):
@@ -58,10 +58,11 @@ class RealTranslationTests(unittest.TestCase):
                               'ASSET_DIR': os.environ.get('ASSET_DIR', '/opt/pdf2zh-assets')})
             manager = app.extensions['tasks']
             client = app.test_client()
-            headers = {'X-PDF2zh-Request': '1'}
+            headers = {'X-PDF-AI-Translator-Request': '1'}
             try:
                 profile = client.post('/api/model-services', headers=headers, json={'name': 'Local mock',
-                    'provider': 'openaicompatible', 'model': 'mock-translator', 'apiKey': 'integration-secret',
+                    'provider': 'openaicompatible', 'model': 'vendor/DeepSeek-Test', 'apiKey': 'integration-secret',
+                    'thinkingEnabled': True, 'reasoningEffort': 'xhigh', 'enableJsonMode': True,
                     'apiUrl': f'http://127.0.0.1:{model.server_port}/v1'}).json
                 client.put(f'/api/model-services/{profile["id"]}/active', headers=headers)
                 with fitz.open() as doc:
@@ -79,7 +80,7 @@ class RealTranslationTests(unittest.TestCase):
                     pdf = doc.tobytes()
                 response = client.post('/api/tasks', headers=headers, data={'file': (io.BytesIO(pdf), 'integration.pdf'),
                     'options': json.dumps({'targetLang': 'de', 'disableGlossary': True, 'qps': 2, 'poolSize': 1,
-                                           'skipReferences': True, 'tableMode': 'fixed'})})
+                                           'skipReferences': False, 'tableMode': ''})})
                 self.assertEqual(response.status_code, 202, response.json)
                 task_id = response.json['taskId']
                 deadline = time.monotonic() + 240
@@ -103,6 +104,48 @@ class RealTranslationTests(unittest.TestCase):
                     result.close()
                 self.assertFalse((Path(temp) / 'tasks' / task_id / 'engine.toml').exists())
                 self.assertNotIn('integration-secret', client.get('/api/tasks').get_data(as_text=True))
+                # Submit two different policies back-to-back. Both real worker
+                # processes must see their own frozen model profile.
+                queued = []
+                for model_id, enabled, effort in [('Qwen/Qwen3-test', True, ''), ('gpt-5', False, 'max')]:
+                    edited = client.patch(f'/api/model-services/{profile["id"]}', headers=headers,
+                        json={'model': model_id, 'thinkingEnabled': enabled, 'reasoningEffort': effort, 'enableJsonMode': False})
+                    self.assertEqual(edited.status_code, 200, edited.json)
+                    accepted = client.post('/api/tasks', headers=headers,
+                        data={'file': (io.BytesIO(pdf), 'same.pdf'), 'options': json.dumps({
+                            'targetLang': 'de', 'qps': 2, 'poolSize': 1, 'skipReferences': True, 'tableMode': 'fixed'})})
+                    self.assertEqual(accepted.status_code, 202, accepted.json)
+                    queued.append(accepted.json['taskId'])
+                for queued_id in queued:
+                    deadline = time.monotonic() + 240
+                    while time.monotonic() < deadline:
+                        state = manager.get(queued_id)
+                        if state['state'] in ('succeeded', 'failed', 'interrupted'):
+                            break
+                        time.sleep(.2)
+                    if state['state'] != 'succeeded':
+                        self.fail(f'{state}\n{(Path(temp) / "tasks" / queued_id / "task.log").read_text()[-16000:]}')
+                grouped = {name: [call for call in calls if call['model'] == name]
+                           for name in ('vendor/DeepSeek-Test', 'Qwen/Qwen3-test', 'gpt-5')}
+                for name, requests in grouped.items():
+                    self.assertTrue(requests, name)
+                    self.assertTrue(all('temperature' not in call for call in requests), name)
+                for call in grouped['vendor/DeepSeek-Test']:
+                    self.assertEqual(call.get('thinking'), {'type': 'enabled'})
+                    self.assertEqual(call.get('reasoning_effort'), 'xhigh')
+                    self.assertNotIn('enable_thinking', call)
+                self.assertTrue(any(call.get('response_format') == {'type': 'json_object'}
+                                    for call in grouped['vendor/DeepSeek-Test']))
+                for call in grouped['Qwen/Qwen3-test']:
+                    self.assertIs(call.get('enable_thinking'), True)
+                    self.assertNotIn('thinking', call)
+                    self.assertNotIn('reasoning_effort', call)
+                    self.assertNotIn('response_format', call)
+                for call in grouped['gpt-5']:
+                    self.assertEqual(call.get('reasoning_effort'), 'none')
+                    self.assertNotIn('thinking', call)
+                    self.assertNotIn('enable_thinking', call)
+                    self.assertNotIn('response_format', call)
                 manager.shutdown(3)
                 restored = create_app({'TESTING': True, 'DATA_DIR': temp, 'AUTH_REQUIRED': False})
                 try:

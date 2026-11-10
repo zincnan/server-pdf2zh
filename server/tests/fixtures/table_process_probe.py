@@ -8,7 +8,7 @@ from types import ModuleType
 
 from utils import table_process
 
-STATE = {"mode": None, "installs": 0}
+STATE = {"mode": None, "installs": 0, "modelInstalls": 0, "fields": None}
 
 
 def policy(mode):
@@ -18,6 +18,18 @@ def policy(mode):
     def restore():
         STATE["mode"] = None
         STATE["installs"] -= 1
+
+    return restore
+
+
+def model_policy(value):
+    from utils.model_policy import request_fields
+    STATE["fields"] = request_fields(value)
+    STATE["modelInstalls"] += 1
+
+    def restore():
+        STATE["fields"] = None
+        STATE["modelInstalls"] -= 1
 
     return restore
 
@@ -36,30 +48,38 @@ sys.modules["pdf2zh_next"] = package
 sys.modules["pdf2zh_next.high_level"] = engine
 table_process.install_table_policy = policy
 table_process.table_policy_supported = lambda: True
+table_process.install_model_policy = model_policy
 
 
 def main():
     context = multiprocessing.get_context(sys.argv[1])
     queue = context.Queue()
-    restore = table_process.install_table_process_policy("fixed")
+    scenario = sys.argv[2] if len(sys.argv) > 2 else 'table'
+    mode = None if scenario == 'model' else 'fixed'
+    control = {'model': 'Qwen/Qwen3-test', 'thinkingEnabled': False} if scenario != 'table' else None
+    restore = table_process.install_table_process_policy(mode, model_policy=control)
+    expected = {"mode": mode, "installs": int(mode is not None),
+                "modelInstalls": int(control is not None),
+                "fields": {"enable_thinking": False} if control else None}
     try:
         child = context.Process(target=engine._translate_wrapper, args=(queue,))
         child.start()
         result = queue.get(timeout=20)
         child.join(timeout=20)
         assert child.exitcode == 0, child.exitcode
-        assert result == {"mode": "fixed", "installs": 1, "pid": child.pid}, result
+        assert result == {**expected, "pid": child.pid}, result
         assert child.pid != os.getpid()
         # The debug/in-process path is covered by the parent's own policy.
         native_worker(queue)
-        assert queue.get(timeout=5)["mode"] == "fixed"
-        assert STATE["installs"] == 1
+        parent_result = queue.get(timeout=5)
+        assert all(parent_result[k] == v for k, v in expected.items())
+        assert STATE == expected
     finally:
         restore()
         queue.close()
         queue.join_thread()
     assert engine._translate_wrapper is native_worker
-    assert STATE == {"mode": None, "installs": 0}
+    assert STATE == {"mode": None, "installs": 0, "modelInstalls": 0, "fields": None}
     print(json.dumps(result))
 
 

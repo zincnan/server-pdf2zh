@@ -12,6 +12,7 @@ from utils.table_runtime import (
     warn_native_table_fallback,
 )
 from utils.table_mode import parse_table_mode
+from utils.model_policy import install_model_policy
 from utils.reference_skip import (
     install_reference_skip_policy,
     policy_supported as reference_policy_supported,
@@ -22,9 +23,11 @@ _native_worker = None
 _parent_restore = None
 
 
-def _install_policies(mode, reference_skip):
+def _install_policies(mode, reference_skip, model_policy=None):
     restores = []
     try:
+        if model_policy is not None:
+            restores.append(install_model_policy(model_policy))
         # Table process_page wraps the reference filter, not vice versa.
         if reference_skip:
             restores.append(install_reference_skip_policy())
@@ -42,20 +45,20 @@ def _install_policies(mode, reference_skip):
     return restore
 
 
-def _run_table_worker(mode, *args, reference_skip=False, **kwargs):
+def _run_table_worker(mode, *args, reference_skip=False, model_policy=None, **kwargs):
     from pdf2zh_next import high_level
 
     native = _native_worker or high_level._translate_wrapper
     if _parent_restore is not None:
         _parent_restore()
-    restore = _install_policies(mode, reference_skip)
+    restore = _install_policies(mode, reference_skip, model_policy)
     try:
         return native(*args, **kwargs)
     finally:
         restore()
 
 
-def install_table_process_policy(mode, reference_skip=False):
+def install_table_process_policy(mode, reference_skip=False, model_policy=None):
     parse_table_mode(mode)
     if mode and not table_policy_supported():
         warn_native_table_fallback()
@@ -63,7 +66,7 @@ def install_table_process_policy(mode, reference_skip=False):
     if reference_skip and not reference_policy_supported():
         warn_reference_fallback()
         reference_skip = False
-    if not mode and not reference_skip:
+    if not mode and not reference_skip and model_policy is None:
         return lambda: None
 
     from pdf2zh_next import high_level
@@ -71,11 +74,11 @@ def install_table_process_policy(mode, reference_skip=False):
     global _native_worker, _parent_restore
     if _native_worker is not None:
         raise RuntimeError("BabelDOC process policy is already installed")
-    restore_policy = _install_policies(mode, reference_skip)
+    restore_policy = _install_policies(mode, reference_skip, model_policy)
     native = high_level._translate_wrapper
     _native_worker, _parent_restore = native, restore_policy
     high_level._translate_wrapper = partial(
-        _run_table_worker, mode, reference_skip=reference_skip
+        _run_table_worker, mode, reference_skip=reference_skip, model_policy=model_policy
     )
 
     def restore():

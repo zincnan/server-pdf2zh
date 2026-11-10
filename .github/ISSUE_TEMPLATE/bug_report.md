@@ -1,6 +1,6 @@
 ---
 name: 问题反馈
-about: PDF Translate 的部署、翻译或任务问题
+about: PDF AI Translator 的部署、翻译或任务问题
 ---
 
 ## 问题与复现

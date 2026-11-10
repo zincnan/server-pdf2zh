@@ -8,7 +8,7 @@ let capabilities, serviceData = {activeId: null, services: []}, tasks = [], filt
 function element(tag, text, className) {const el = document.createElement(tag); if (text !== undefined) el.textContent = text; if (className) el.className = className; return el;}
 function notice(message, error = false) {$('notice').textContent = message; $('notice').className = `notice${error ? ' error' : ''}`; $('notice').hidden = false; clearTimeout(noticeTimer); noticeTimer = setTimeout(() => {$('notice').hidden = true;}, 10000);}
 async function api(path, options = {}) {
-  const headers = {'X-PDF2zh-Request': '1', ...(options.headers || {})};
+  const headers = {'X-PDF-AI-Translator-Request': '1', ...(options.headers || {})};
   if (options.body && !(options.body instanceof FormData)) headers['Content-Type'] = 'application/json';
   const response = await fetch(path, {...options, headers, cache: 'no-store'});
   const result = response.status === 204 ? null : await response.json();
@@ -22,50 +22,91 @@ async function loadServices() {
   serviceData = await api('/api/model-services');
   const select = $('active-service'); select.replaceChildren();
   const empty = element('option', '请选择并激活一个模型服务'); empty.value = ''; select.append(empty);
-  for (const profile of serviceData.services) {const option = element('option', `${profile.name} · ${profile.model || profile.provider}`); option.value = profile.id; select.append(option);}
+  for (const profile of serviceData.services.filter((p) => !p.needsConversion)) {const option = element('option', `${profile.name} · ${profile.model || profile.provider}`); option.value = profile.id; select.append(option);}
   select.value = serviceData.activeId || '';
   $('submit-task').disabled = !serviceData.activeId;
   renderServices();
 }
 function renderServices() {
   const list = $('services-list'); list.replaceChildren();
+  $('services-warning').hidden = !serviceData.services.some((p) => p.needsConversion);
+  $('services-warning').textContent = '部分旧配置需要转换。请编辑为受支持的服务，填写完整后再激活；原配置已备份。';
   if (!serviceData.services.length) list.append(element('p', '还没有模型服务。添加一个配置并激活后即可翻译。', 'muted small'));
   for (const profile of serviceData.services) {
     const active = profile.id === serviceData.activeId;
     const row = element('div', undefined, `service-row${active ? ' active' : ''}`);
-    const description = element('div', undefined, 'service-description'); description.append(element('strong', profile.name + (active ? ' · 当前激活' : '')), element('span', `${profile.provider} / ${profile.model || '默认模型'}${profile.hasApiKey ? ' · 已保存密钥' : ''}`)); row.append(description);
-    if (!active) row.append(actionButton('激活', async () => {await api(`/api/model-services/${profile.id}/active`, {method: 'PUT'}); await loadServices();}));
-    row.append(actionButton('编辑', () => editService(profile)), actionButton('删除', async () => {if (!confirm(`删除模型服务“${profile.name}”？已提交任务不受影响。`)) return; await api(`/api/model-services/${profile.id}`, {method: 'DELETE'}); if (editing?.id === profile.id) editService(null); await loadServices();})); list.append(row);
+    const description = element('div', undefined, 'service-description');
+    const provider = capabilities.providers.find((p) => p.id === profile.provider);
+    description.append(element('strong', profile.name + (profile.needsConversion ? ' · 待转换' : active ? ' · 当前激活' : '')),
+      element('span', `${provider?.label || profile.provider}${profile.model ? ' / ' + profile.model : ''}${profile.hasApiKey ? ' · 已保存密钥' : ''}`)); row.append(description);
+    if (!active && !profile.needsConversion) row.append(actionButton('激活', async () => {await api(`/api/model-services/${profile.id}/active`, {method: 'PUT'}); await loadServices();}));
+    row.append(actionButton(profile.needsConversion ? '转换' : '编辑', () => editService(profile)), actionButton('删除', async () => {if (!confirm(`删除模型服务“${profile.name}”？已提交任务不受影响。`)) return; await api(`/api/model-services/${profile.id}`, {method: 'DELETE'}); if (editing?.id === profile.id) editService(null); await loadServices();})); list.append(row);
   }
+}
+function inferModel(model) {
+  const name = model.trim().split('/').pop().toLowerCase();
+  return capabilities.modelRules.find((rule) => new RegExp(rule.pattern).test(name)) || {id: 'openai', label: '标准 OpenAI / 未知模型'};
+}
+function updateModelControls() {
+  const model = $('profile-model');
+  if (!model) return;
+  const family = inferModel(model.value);
+  $('model-recognition').textContent = `自动识别：${family.label}。自定义模型别名可能无法识别。`;
+  const enabled = $('thinking-enabled').checked;
+  $('reasoning-effort').disabled = !enabled;
+  const standard = family.id === 'openai' || family.id === 'openai-reasoning';
+  $('reasoning-effort').setCustomValidity(enabled && standard && !$('reasoning-effort').value ? 'OpenAI 格式开启思考时，请选择具体的推理强度' : '');
+  $('thinking-help').textContent = family.id === 'openai'
+    ? '未知模型关闭思考时不发送思考参数，服务端默认行为仍由模型决定。'
+    : '按模型类型自动生成思考开关；不支持的参数会由模型服务报错。';
 }
 function providerFields() {
   const provider = capabilities.providers.find((p) => p.id === $('provider').value);
-  const current = editing?.provider === provider.id ? editing : null;
-  $('provider-fields').replaceChildren(); $('extra-fields').replaceChildren();
-  const labels = {apiUrl: 'API URL', apiKey: 'API Key', model: '模型名称'};
+  const current = editing && (editing.provider === provider.id || editing.needsConversion) ? editing : null;
+  $('provider-fields').replaceChildren(); $('model-controls').replaceChildren();
+  const labels = {apiUrl: 'Base URL', apiKey: 'API Key', model: 'Model ID'};
   for (const field of provider.fields) {
     const div = element('div', undefined, 'field'), label = element('label', labels[field]); label.htmlFor = `profile-${field}`;
     const input = element('input'); input.id = `profile-${field}`; input.dataset.profileField = field;
     input.type = field === 'apiKey' ? 'password' : field === 'apiUrl' ? 'url' : 'text';
     input.autocomplete = 'off'; input.maxLength = 4096;
-    if (field === 'apiKey') input.placeholder = current?.hasApiKey ? '已保存；留空保留原密钥' : '输入服务商 API Key';
-    else {input.value = current?.[field] || ''; input.placeholder = field === 'apiUrl' ? 'https://api.example.com/v1' : '选择的服务商模型 ID';}
+    input.required = field !== 'apiKey' || !current?.hasApiKey;
+    if (field === 'apiKey') input.placeholder = current?.hasApiKey ? '已保存；留空保留原密钥，输入新值替换' : '输入服务的 API Key';
+    else {input.value = current?.[field] || ''; input.placeholder = field === 'apiUrl' ? 'https://api.example.com/v1' : '例如：Qwen/Qwen3-32B';}
     div.append(label, input);
-    if (field === 'apiKey' && current?.hasApiKey) {const clear = element('label', '删除已保存的密钥', 'check'); const checkbox = element('input'); checkbox.type = 'checkbox'; checkbox.id = 'clear-api-key'; clear.prepend(checkbox); div.append(clear);}
+    if (field === 'apiUrl') div.append(element('span', '填写 API 基础地址，无需追加 /chat/completions。', 'field-help'));
     $('provider-fields').append(div);
   }
-  for (const field of provider.extraFields) {
-    const label = element('label', field.key);
-    const input = element(field.type === 'boolean' ? 'select' : 'input'); input.dataset.extraField = field.key;
-    if (field.type === 'boolean') {for (const [value, text] of [['', '默认'], ['true', '开启'], ['false', '关闭']]) {const option = element('option', text); option.value = value; input.append(option);} input.value = current?.extraData?.[field.key] === undefined ? '' : String(current.extraData[field.key]);}
-    else {input.type = field.secret ? 'password' : 'text'; input.autocomplete = 'off'; input.value = current?.extraData?.[field.key] ?? ''; if (current?.secretExtraFields?.includes(field.key)) input.placeholder = '已保存；留空保留原值';}
-    label.append(input); $('extra-fields').append(label);
+  if (provider.id !== 'openaicompatible') {
+    $('provider-fields').append(element('p', '使用 next 引擎内置翻译服务，无需填写模型地址或密钥。', 'field-help'));
+    return;
   }
-  $('extra-details').hidden = provider.extraFields.length === 0;
+  const box = $('model-controls');
+  const checks = element('div', undefined, 'check-grid model-checks');
+  for (const [id, text, field] of [['json-mode', '启用 JSON 模式', 'enableJsonMode'], ['thinking-enabled', '启用思考', 'thinkingEnabled']]) {
+    const label = element('label', text, 'check'), input = element('input');
+    input.type = 'checkbox'; input.id = id; input.checked = current?.[field] || false;
+    label.prepend(input); checks.append(label);
+  }
+  box.append(checks);
+  const recognition = element('p', undefined, 'field-help'); recognition.id = 'model-recognition'; recognition.setAttribute('aria-live', 'polite'); box.append(recognition);
+  const field = element('div', undefined, 'field'), label = element('label', '推理强度'); label.htmlFor = 'reasoning-effort';
+  const select = element('select'); select.id = 'reasoning-effort';
+  for (const value of capabilities.reasoningEfforts) {const option = element('option', value || '不发送（使用模型默认）'); option.value = value; select.append(option);}
+  select.value = current?.reasoningEffort || '';
+  field.append(label, select); box.append(field);
+  const help = element('p', undefined, 'field-help'); help.id = 'thinking-help'; box.append(help);
+  box.append(element('p', '不发送温度参数。推理强度由你按模型支持选择；JSON 模式仅在引擎需要结构化输出时启用。', 'field-help'));
+  $('profile-model').addEventListener('input', updateModelControls);
+  $('thinking-enabled').addEventListener('change', updateModelControls);
+  select.addEventListener('change', updateModelControls);
+  updateModelControls();
 }
 function editService(profile) {
   editing = profile; $('service-id').value = profile?.id || ''; $('service-name').value = profile?.name || '';
-  $('provider').value = profile?.provider || 'openaicompatible'; $('service-form-title').textContent = profile ? '编辑模型服务' : '添加模型服务'; $('service-error').textContent = ''; providerFields();
+  $('provider').value = capabilities.providers.some((p) => p.id === profile?.provider) ? profile.provider : 'openaicompatible';
+  $('service-form-title').textContent = profile?.needsConversion ? '转换旧配置' : profile ? '编辑模型服务' : '添加模型服务';
+  $('service-error').textContent = ''; providerFields();
 }
 async function openServices(fresh = false) {if (fresh) editService(null); await loadServices(); if (!$('services-dialog').open) $('services-dialog').showModal();}
 function renderTasks() {
@@ -123,9 +164,16 @@ $('active-service').addEventListener('change', async () => {try {if ($('active-s
 $('service-form').addEventListener('submit', async (event) => {
   event.preventDefault(); const button = event.submitter; button.disabled = true;
   try {
-    const profile = {name: $('service-name').value, provider: $('provider').value, extraData: {}};
-    document.querySelectorAll('[data-profile-field]').forEach((input) => {const field = input.dataset.profileField; if (field !== 'apiKey' || input.value || !editing || $('clear-api-key')?.checked) profile[field] = field === 'apiKey' && $('clear-api-key')?.checked ? '' : input.value;});
-    document.querySelectorAll('[data-extra-field]').forEach((input) => {const key = input.dataset.extraField; if (!input.value && editing?.secretExtraFields?.includes(key) && input.type === 'password') return; profile.extraData[key] = input.tagName === 'SELECT' && input.value !== '' ? input.value === 'true' : input.value;});
+    const profile = {name: $('service-name').value, provider: $('provider').value};
+    document.querySelectorAll('[data-profile-field]').forEach((input) => {
+      const field = input.dataset.profileField;
+      if (field !== 'apiKey' || input.value || !editing?.hasApiKey) profile[field] = input.value;
+    });
+    if (profile.provider === 'openaicompatible') Object.assign(profile, {
+      enableJsonMode: $('json-mode').checked,
+      thinkingEnabled: $('thinking-enabled').checked,
+      reasoningEffort: $('reasoning-effort').value,
+    });
     const saved = await api('/api/model-services' + (editing ? '/' + editing.id : ''), {method: editing ? 'PATCH' : 'POST', body: JSON.stringify(profile)});
     if (!serviceData.activeId) await api(`/api/model-services/${saved.id}/active`, {method: 'PUT'});
     editService(null); await loadServices(); notice('模型服务已保存');

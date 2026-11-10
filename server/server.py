@@ -1,4 +1,4 @@
-"""Independent PDF translation Web service. Start through Docker Compose."""
+"""PDF AI Translator Web service. Start through Docker Compose."""
 import json
 import os
 import secrets
@@ -12,10 +12,14 @@ from flask import Flask, Response, jsonify, request, send_file, session
 from werkzeug.exceptions import HTTPException, RequestEntityTooLarge
 from utils.config import DEFAULTS, validate_options
 from utils.services import ServiceStore, provider_catalog
+from utils.model_policy import EFFORTS, MODEL_RULES
 from utils.storage import atomic_json, read_json
 from utils.task_manager import BusyError, InvalidPDF, TaskManager
 
 __version__ = '1.0.0'
+PRODUCT_NAME = 'PDF AI Translator'
+PROJECT_ID = 'pdf-ai-translator'
+SERVICE_NAME = 'pdf-ai-translator-server'
 ROOT = Path(__file__).resolve().parent
 
 
@@ -62,7 +66,7 @@ def create_app(config=None):
         # A custom header blocks cross-origin form submissions, including in
         # local passwordless mode. No CORS permission is granted.
         if request.method not in ('GET', 'HEAD', 'OPTIONS'):
-            if request.headers.get('X-PDF2zh-Request') != '1':
+            if request.headers.get('X-PDF-AI-Translator-Request') != '1':
                 return jsonify(error='请求来源无效'), 403
             origin = request.headers.get('Origin')
             if origin and (urlsplit(origin).scheme not in ('http', 'https') or urlsplit(origin).netloc.lower() != request.host.lower()):
@@ -110,7 +114,8 @@ def create_app(config=None):
 
     @app.get('/health')
     def health():
-        return jsonify(status='ok' if manager.accepting else 'stopping', version=__version__), 200 if manager.accepting else 503
+        return jsonify(status='ok' if manager.accepting else 'stopping', version=__version__,
+                       product=PRODUCT_NAME, project=PROJECT_ID, service=SERVICE_NAME), 200 if manager.accepting else 503
 
     @app.route('/api/session', methods=['GET', 'POST', 'DELETE'])
     def access_session():
@@ -135,7 +140,9 @@ def create_app(config=None):
 
     @app.get('/api/capabilities')
     def capabilities():
-        return jsonify(version=__version__, engine='pdf2zh_next', providers=provider_catalog(), defaults=DEFAULTS,
+        return jsonify(version=__version__, product=PRODUCT_NAME, project=PROJECT_ID, service=SERVICE_NAME,
+                       engine='pdf2zh_next', providers=provider_catalog(), defaults=DEFAULTS,
+                       modelRules=MODEL_RULES, reasoningEfforts=EFFORTS,
                        maxUploadBytes=app.config['MAX_FILE_BYTES'], concurrency=app.config['MAX_WORKERS'])
 
     @app.route('/api/model-services', methods=['GET', 'POST'])
@@ -236,7 +243,7 @@ def main():
     signal.signal(signal.SIGINT, stop)
     thread = threading.Thread(target=server.run, name='http', daemon=True)
     thread.start()
-    print(f'PDF Translate listening on :{port}', flush=True)
+    print(f'{PRODUCT_NAME} listening on :{port}', flush=True)
     while thread.is_alive() and not stopping.wait(0.5):
         pass
     clean = app.extensions['tasks'].shutdown(int(os.environ.get('SHUTDOWN_GRACE_SECONDS', '600')))

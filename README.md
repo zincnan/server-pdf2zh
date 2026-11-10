@@ -1,82 +1,90 @@
-# PDF Translate
+# PDF AI Translator
 
-独立、可私有部署的 PDF 翻译 Web 服务。基于 Flask、PDFMathTranslate Next 和 BabelDOC，复用 zotero-pdf2zh 中的翻译参数适配、进度解析、表格增强、参考文献跳过及裁剪排版实现，无需 Zotero。
+[简体中文](README.md) · [English](README.en.md)
 
-支持浏览器上传 PDF、配置多个模型服务、激活一个配置、并发翻译、实时查看进度、下载或预览结果，以及按任务清理全部文档数据。
+可私有部署的 PDF 翻译 Web 应用。在浏览器上传文档、选择模型、查看进度，下载保留排版的译文或双语 PDF。支持多文件并发、OCR、表格处理和参考文献跳过。
 
-## 启动
+## 快速开始
 
-需要 Docker Engine 和 Docker Compose：
+准备好 Docker 和 Docker Compose v2，在项目根目录执行：
 
 ```sh
 docker compose up -d --build
 ```
 
-打开 <http://127.0.0.1:7000>。首次构建会安装翻译引擎、下载字体和版面模型，需要联网；随后任务复用镜像中的静态资源。模型服务依然需要对应的网络连接或本机模型。
+打开 **http://127.0.0.1:7000**：
 
-首次进入，在“模型服务”中添加服务商、API URL、API Key 和模型，保存并激活。也支持不需要密钥的引擎适配服务。上传一份或多份 PDF，选择参数后开始翻译。默认最多同时翻译 2 个任务，其他任务排队。
+1. 在“模型服务”中添加配置并激活。
+2. 上传 PDF，选择参数，点击“开始翻译”。
+3. 完成后下载文件；不再需要时点击 `Clear` 或 `Clear all`。
 
-连接宿主机上的 Ollama 等服务时，使用 `http://host.docker.internal:11434`，不要使用指向容器自身的 `localhost`。宿主机服务需允许来自 Docker 网段的连接。
+首次构建需要联网下载依赖、字体和版面模型。默认同时翻译 **2** 个任务，每份文件最多 **100 MiB**；默认启用自动 OCR，关闭自动术语提取。
 
-## 访问与部署配置
+## 模型服务
 
-复制 `.env.example` 为 `.env` 后修改：
+| 类型 | 需要填写 |
+| --- | --- |
+| OpenAI compatible | 配置名称、Base URL、API Key、Model ID |
+| Google 翻译 / Bing 翻译 | 配置名称 |
 
-| 变量 | 默认值 | 含义 |
+可以保存多个配置并激活一个；切换或编辑配置不影响已提交任务。JSON 模式、思考开关和推理强度直接在表单中设置。思考参数按 Model ID 自动识别，自定义别名可能无法识别；不发送温度参数。[参数说明](server/doc/model-configuration.md)
+
+连接宿主机 Ollama 的 OpenAI 兼容接口时，Base URL 使用 `http://host.docker.internal:11434/v1`；容器内的 `localhost` 指向容器自身。模型服务需允许来自 Docker 网段的连接。
+
+## 部署设置
+
+首次自定义配置时，将 `.env.example` 复制为 `.env` 并编辑，然后重新执行启动命令。
+
+| 变量 | 默认值 | 说明 |
 | --- | --- | --- |
-| `BIND_ADDRESS` | `127.0.0.1` | 宿主机发布地址；`0.0.0.0` 开放网络访问并强制登录 |
+| `BIND_ADDRESS` | `127.0.0.1` | 仅本机访问；设为 `0.0.0.0` 后允许远程访问并要求登录 |
 | `PORT` | `7000` | 宿主机端口 |
-| `ACCESS_PASSWORD` | `pdf2zh` | 网络访问密码 |
-| `MAX_CONCURRENT_TASKS` | `2` | 同时执行的任务数，1–32；根据内存与模型额度调整 |
-| `MAX_UPLOAD_MB` | `100` | 每份 PDF 大小上限，MiB |
-| `SHUTDOWN_GRACE_SECONDS` | `600` | 停止时等待正在执行任务的秒数 |
-| `COOKIE_SECURE` | `false` | 通过 HTTPS 反向代理访问时设为 `true` |
+| `ACCESS_PASSWORD` | `pdf2zh` | 远程访问密码 |
+| `MAX_CONCURRENT_TASKS` | `2` | 同时执行的任务数，范围 1–32 |
+| `MAX_UPLOAD_MB` | `100` | 单份 PDF 上限，单位 MiB |
+| `SHUTDOWN_GRACE_SECONDS` | `600` | 停止服务时等待任务的秒数 |
+| `COOKIE_SECURE` | `false` | 通过 HTTPS 访问时设为 `true` |
 
-容器内部始终监听 `0.0.0.0:7000`；登录要求取决于显式传入的宿主机发布地址 `PUBLISHED_BIND_ADDRESS`，未声明时默认要求登录。使用 Compose 以外的启动方式时，需自行映射 `/data` 并传入对应配置。仅支持单实例独占同一个数据卷。
-
-通过反向代理使用时保持同源访问，为 `/events` 禁用响应缓冲并允许长连接；不要将前端与 API 部署在不同源。服务不会在运行期自动升级、重载源码或安装依赖。
-
-## 任务、重启与清理
-
-- 刷新、关闭网页不会取消任务，重新打开即可查看状态。
-- 原 PDF、生成文件、文档缓存、中间数据和任务清单保存在 Docker 的 `pdf2zh-data` 命名卷。
-- 重启后已完成结果仍可下载；排队或运行中的任务标记为“已中断”，需要点击“重新翻译”。重试使用当前激活服务，重新执行整个文档，不保证断点续译。
-- 正常停止会先拒绝新任务，最多等待配置的宽限时间。`docker kill`、断电和 OOM 等强制终止会中断正在执行的任务，但保留已经落盘的文件。
-- `Clear` 删除一个已结束任务的原文、结果、中间数据、翻译缓存、日志和记录。`Clear all` 清理全部已结束任务，跳过运行中或正在下载的任务。
-- **模型服务与 API Key 是服务配置，独立持久保存；清理任务不会删除它们。** API 查询不返回已保存密钥。编辑时留空保留密钥，勾选删除密钥可移除。
-- 引擎运行时的临时配置可能包含凭据，文件仅服务进程可读写，结束后删除。任务错误与诊断日志脱敏后保存在任务目录，不将全文输出到容器日志。
-- 不设置任务自动过期，也不在启动时删除未清理的正常任务。磁盘占用会随保留任务增加。
-- `docker compose down` 保留命名卷；`docker compose down -v` 会删除包括模型配置在内的所有数据。
-
-任务采用各自目录，允许同时上传同名文件。该产品是单机持久工作台，按任务手动清理；不是跨实例无状态服务。
-
-## 翻译功能
-
-仅使用 `pdf2zh_next`，保留仅译文、双语、LR 左右布局、TB 交替页、双栏裁剪、对照输出、OCR 兼容选项、表格模式和参考文献跳过。独立裁剪 API 和 Zotero 插件协议均已移除。
-
-默认勾选“自动启用 OCR”和“关闭自动术语提取”，可在高级翻译参数中取消勾选。
-
-裁剪面向双栏论文，单栏文档通常无需启用。OCR、表格和公式的具体效果由文档及引擎能力决定。表格和参考文献扩展只在经过验证的引擎版本上启用。
-
-## 依赖与验证
-
-引擎基线：Python 3.12、pdf2zh-next 2.9.0、BabelDOC 0.6.4、PyMuPDF 1.26.7。`server/requirements.txt` 锁定完整依赖及哈希。
-
-next 2.9.0 的发布元数据声明 `PyMuPDF<1.25.3`，而 BabelDOC 0.6.4 要求 `PyMuPDF>=1.26.7`。`server/overrides.txt` 显式选用 BabelDOC 所需的渲染器版本；Docker 使用 uv 安装并应用这一个覆盖。不能用忽略此覆盖的普通 pip 安装替代。
-
-开发验证命令：
+远程访问地址为 `http://服务器IP:7000`。使用反向代理时保持页面和 API 同源，为 `/events` 关闭缓冲并允许长连接。
 
 ```sh
-uv venv --python 3.12 .venv-test
-uv pip install --python .venv-test/bin/python --override server/overrides.txt -r server/requirements.txt
-PYTHONPATH=server .venv-test/bin/python -m unittest discover -s server/tests -p 'test_*.py' -v
-node --check server/static/app.js
-docker compose config --quiet
-docker build -t pdf2zh-web:test .
+docker compose logs -f pdf-ai-translator-server  # 查看服务日志
+docker compose down                           # 停止服务，保留数据
 ```
 
-更新依赖时编辑 `server/requirements.in`，重新生成锁文件并运行回归；不要直接放宽 BabelDOC 版本，因为表格与参考文献扩展使用了其内部接口。
+Compose 项目名为 `pdf-ai-translator`，服务名与容器名均为 `pdf-ai-translator-server`，镜像为 `pdf-ai-translator-server:latest`。
 
-## 来源
+## 离线部署
 
-本项目基于 [guaguastandup/zotero-pdf2zh](https://github.com/guaguastandup/zotero-pdf2zh) 改造；翻译核心来自 [PDFMathTranslate Next](https://github.com/PDFMathTranslate-next/PDFMathTranslate-next) 与 [BabelDOC](https://github.com/funstory-ai/BabelDOC)。保留原有 AGPL 许可证及相关来源说明，见 [LICENSE](LICENSE)。
+在与服务器 CPU 架构相同的联网机器上构建并导出：
+
+```sh
+docker compose build
+docker save pdf-ai-translator-server:latest | gzip > pdf-ai-translator-server.tar.gz
+```
+
+将镜像包、`compose.yaml` 和按需配置的 `.env` 复制到服务器，再执行：
+
+```sh
+docker load -i pdf-ai-translator-server.tar.gz
+docker compose up -d --no-build --pull never
+```
+
+服务器需提前安装 Docker 和 Compose。镜像已包含翻译引擎和静态资源，但翻译仍需能访问所选服务；完全离线时，请使用内网的 OpenAI 兼容模型服务。
+
+## 数据与升级
+
+默认数据卷为 **`pdf-ai-translator-data`**，挂载到 `/data`，保存模型配置、密钥、原文、结果和任务记录。
+
+- 关闭网页不影响翻译。服务重启后保留已完成结果，中断任务可手动重新翻译，不保证断点续译。
+- `Clear` 清理单个已结束任务的全部数据；`Clear all` 跳过运行中或下载中的任务。模型配置单独保存，不随任务清理。
+- 任务不会自动过期。`docker compose down` 保留数据；`docker compose down -v` 会删除默认数据卷。
+- 旧部署升级时，先停止旧容器，再在 `.env` 中设置 `DATA_VOLUME=原数据卷名称`、`DATA_VOLUME_EXTERNAL=true`，即可复用原数据。不要让两个实例同时使用同一数据卷。[迁移步骤](server/doc/deployment.md)
+
+旧版模型配置会自动备份并迁移；不再支持的服务类型显示为“待转换”，编辑后再激活。
+
+## 开发与来源
+
+[开发与测试](server/doc/development.md) · [表格处理](server/doc/table-modes.md) · [参考文献跳过](server/doc/reference-skip.md)
+
+基于 [zotero-pdf2zh](https://github.com/guaguastandup/zotero-pdf2zh) 改造，翻译引擎使用 [PDFMathTranslate Next](https://github.com/PDFMathTranslate-next/PDFMathTranslate-next) 和 [BabelDOC](https://github.com/funstory-ai/BabelDOC)。许可证：[AGPL-3.0](LICENSE)。

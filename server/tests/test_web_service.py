@@ -18,7 +18,7 @@ from utils.services import ServiceStore
 from utils.storage import atomic_json
 from utils.task_manager import BusyError, TaskManager
 
-HEADERS = {'X-PDF2zh-Request': '1'}
+HEADERS = {'X-PDF-AI-Translator-Request': '1'}
 
 
 def pdf_bytes(text='An example document with enough readable text for a PDF.'):
@@ -56,7 +56,7 @@ class WebTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.addCleanup(lambda: self.manager.shutdown(2))
         profile = self.client.post('/api/model-services', headers=HEADERS,
-            json={'name': 'Local test', 'provider': 'openaicompatible', 'apiKey': 'secret-one', 'model': 'test'}).get_json()
+            json={'name': 'Local test', 'provider': 'openaicompatible', 'apiKey': 'secret-one', 'apiUrl': 'http://127.0.0.1:12345/v1', 'model': 'test'}).get_json()
         self.profile_id = profile['id']
         self.client.put(f'/api/model-services/{self.profile_id}/active', headers=HEADERS)
 
@@ -263,7 +263,7 @@ class LifecycleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             paths = [Path(temp) / f'{index}.toml' for index in range(2)]
             for index, path in enumerate(paths):
-                Config({}).write({'provider': 'openai', 'apiKey': f'key-{index}', 'extraData': {}}, path, Path(temp))
+                Config({}).write({'provider': 'openaicompatible', 'apiKey': f'key-{index}', 'apiUrl': 'http://localhost/v1', 'model': 'test'}, path, Path(temp))
             self.assertIn('key-0', paths[0].read_text())
             self.assertNotIn('key-1', paths[0].read_text())
 

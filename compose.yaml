@@ -1,7 +1,10 @@
+name: pdf-ai-translator
+
 services:
-  pdf2zh:
+  pdf-ai-translator-server:
     build: .
-    image: pdf2zh-web:local
+    image: pdf-ai-translator-server:latest
+    container_name: pdf-ai-translator-server
     init: true
     ports:
       - "${BIND_ADDRESS:-127.0.0.1}:${PORT:-7000}:7000"
@@ -13,7 +16,7 @@ services:
       SHUTDOWN_GRACE_SECONDS: ${SHUTDOWN_GRACE_SECONDS:-600}
       COOKIE_SECURE: ${COOKIE_SECURE:-false}
     volumes:
-      - pdf2zh-data:/data
+      - data:/data
     extra_hosts:
       - "host.docker.internal:host-gateway"
     stop_grace_period: 620s
@@ -29,4 +32,6 @@ services:
       start_period: 30s
       retries: 3
 volumes:
-  pdf2zh-data:
+  data:
+    name: ${DATA_VOLUME:-pdf-ai-translator-data}
+    external: ${DATA_VOLUME_EXTERNAL:-false}

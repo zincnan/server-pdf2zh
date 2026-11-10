@@ -36,6 +36,7 @@ from utils.table_layout import (
 )
 from utils.table_images import avoid_images, image_boxes, overlaps, rect
 from utils.table_mode import parse_table_mode
+from utils.model_policy import POLICY_FLAG
 from utils.table_semantics import group_table_semantics
 from utils.table_structure import (
     atomic_label_translation,
@@ -75,9 +76,16 @@ def warn_native_table_fallback():
 
 
 def prepare_table_runtime_command(command):
-    if FLAG not in command and REFERENCE_FLAG not in command:
+    if FLAG not in command and REFERENCE_FLAG not in command and POLICY_FLAG not in command:
         return command
     args = list(command)
+    policy_path = None
+    if POLICY_FLAG in args:
+        policy_index = args.index(POLICY_FLAG)
+        if policy_index + 1 >= len(args):
+            raise ValueError('Missing model policy file')
+        policy_path = args[policy_index + 1]
+        del args[policy_index:policy_index + 2]
     reference_skip = REFERENCE_FLAG in args
     if reference_skip:
         args.remove(REFERENCE_FLAG)
@@ -88,7 +96,7 @@ def prepare_table_runtime_command(command):
             raise ValueError("Missing table mode")
         mode = parse_table_mode(args[index + 1])
         del args[index : index + 2]
-    if not mode and not reference_skip:
+    if not mode and not reference_skip and not policy_path:
         return args
     if not args:
         raise ValueError("Missing engine command")
@@ -120,6 +128,7 @@ def prepare_table_runtime_command(command):
     return [
         str(python), "-u", str(runner), mode or "none",
         *([REFERENCE_FLAG] if reference_skip else []),
+        *([POLICY_FLAG, policy_path] if policy_path else []),
         *engine_args,
     ]
 

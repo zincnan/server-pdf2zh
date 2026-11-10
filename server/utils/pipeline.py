@@ -9,6 +9,8 @@ from utils.config import Config
 from utils.cropper import Cropper
 from utils.execute import TaskLog, execute_with_progress
 from utils.table_runtime import FLAG, REFERENCE_FLAG, prepare_table_runtime_command
+from utils.model_policy import POLICY_FLAG, runtime_policy
+from utils.storage import atomic_json
 
 ASSET_PARTS = {'fonts', 'models', 'cmap', 'tiktoken'}
 
@@ -81,11 +83,10 @@ def run_pipeline(directory, options, profile, update, register, stopping, assets
         command += [FLAG, cfg.table_mode]
     if cfg.skip_references:
         command.append(REFERENCE_FLAG)
-    if profile['provider'] == 'deepseek' and profile['model'].startswith('deepseek-v4-'):
-        extra = profile.get('extraData', {})
-        command += ['--deepseek-thinking-mode', extra.get('deepseek_thinking_mode', 'disabled')]
-        if extra.get('deepseek_thinking_mode') == 'enabled':
-            command += ['--deepseek-reasoning-effort', extra.get('deepseek_reasoning_effort', 'high')]
+    if profile['provider'] == 'openaicompatible':
+        policy_path = directory / 'model-policy.json'
+        atomic_json(policy_path, runtime_policy(profile))
+        command += [POLICY_FLAG, str(policy_path)]
     update(stage='translating', message='正在解析与翻译 PDF')
     try:
         command = prepare_table_runtime_command(command)
@@ -93,7 +94,11 @@ def run_pipeline(directory, options, profile, update, register, stopping, assets
         update(stage='postprocessing', message='正在生成下载文件')
         return postprocess(directory, cfg, needs_mono, needs_dual, stopping)
     except Exception as exc:
-        raise RuntimeError(log.redact(str(exc)).replace(str(directory), '[任务目录]')) from exc
+        detail = log.redact(str(exc))
+        tail = log.tail()
+        if tail and tail not in detail:
+            detail += '\n\n[引擎诊断]\n' + tail
+        raise RuntimeError(detail.replace(str(directory), '[任务目录]')) from exc
     finally:
         # Credentials remain in the separately managed model service store.
         config_file.unlink(missing_ok=True)

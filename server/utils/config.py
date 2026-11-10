@@ -1,7 +1,6 @@
 """Validated request options and task-local next-engine configuration.
 
-Provider mappings and DeepSeek normalization are retained from the original
-service. No request ever edits a shared engine configuration.
+Provider mappings are retained from the original service. No request ever edits a shared engine configuration.
 """
 import copy
 import math
@@ -9,7 +8,7 @@ from pathlib import Path
 
 import toml
 from utils.config_map import pdf2zh_next_config_map
-from utils.deepseek_thinking import normalize_deepseek_extra_data
+from utils.model_policy import model_options
 from utils.table_mode import parse_table_mode
 
 DEFAULTS = {
@@ -77,17 +76,22 @@ class Config:
             if isinstance(cfg[key], bool):
                 cfg[key] = False
         service = profile['provider']
+        if service not in ('openaicompatible', 'google', 'bing'):
+            raise ValueError('不支持的模型服务类型')
         cfg[service] = True
         mapping = pdf2zh_next_config_map.get(service, {})
         detail = cfg.setdefault(f'{service}_detail', {})
         credentials = copy.deepcopy(profile)
-        if service == 'deepseek':
-            normalize_deepseek_extra_data(credentials, cfg)
         for field in ('apiKey', 'apiUrl', 'model'):
             if field in mapping and credentials.get(field):
                 detail[mapping[field]] = credentials[field]
-        for key, value in credentials.get('extraData', {}).items():
-            detail[key] = value
+        if service == 'openaicompatible':
+            controls = model_options(profile)
+            detail.update(openai_compatible_send_temperature=False,
+                          openai_compatible_temperature='null',
+                          openai_compatible_send_reasoning_effort=False,
+                          openai_compatible_reasoning_effort='null',
+                          openai_compatible_enable_json_mode=controls['enableJsonMode'])
         options = self.options
         cfg['translation'].update(lang_in=options['sourceLang'], lang_out=options['targetLang'],
                                   qps=options['qps'], output=str(output_dir),

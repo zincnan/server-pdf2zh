@@ -19,15 +19,19 @@ jobs:
       - uses: docker/metadata-action@v5
         id: metadata
         with:
-          images: ghcr.io/${{ github.repository }}
+          images: ghcr.io/${{ github.repository_owner }}/pdf-ai-translator-server
+          labels: |
+            org.opencontainers.image.title=PDF AI Translator
+            org.opencontainers.image.description=Self-hosted PDF translation with a browser interface
           tags: |
             type=semver,pattern={{version}}
+            type=raw,value=latest
       - uses: docker/build-push-action@v6
         with:
           context: .
           load: true
-          tags: pdf2zh-web:release-test
-      - run: docker run --rm -e PYTHONPATH=/app/server -e RUN_TRANSLATION_INTEGRATION=1 pdf2zh-web:release-test python -m unittest discover -s /app/server/tests -p 'test_*.py'
+          tags: pdf-ai-translator-server:release-test
+      - run: docker run --rm -e PYTHONPATH=/app/server -e RUN_TRANSLATION_INTEGRATION=1 pdf-ai-translator-server:release-test python -m unittest discover -s /app/server/tests -p 'test_*.py'
       - uses: docker/build-push-action@v6
         with:
           context: .

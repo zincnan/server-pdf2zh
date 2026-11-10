@@ -21,7 +21,7 @@ from utils.config import Config
 class TableModeTests(unittest.TestCase):
     def test_task_config_does_not_inherit_another_tasks_table_switch(self):
         with tempfile.TemporaryDirectory() as temp:
-            profile = {"provider": "openai", "apiKey": "", "apiUrl": "", "model": "", "extraData": {}}
+            profile = {"provider": "openaicompatible", "apiKey": "", "apiUrl": "", "model": "", "extraData": {}}
             for enabled, mode, expected in [(False, "", False), (True, "", True), (True, "fixed", False), (True, "preserve", False)]:
                 with self.subTest(enabled=enabled, mode=mode):
                     path = Path(temp) / "config.toml"
@@ -36,10 +36,11 @@ class TableProcessTests(unittest.TestCase):
         env = {**os.environ, "PYTHONPATH": str(server)}
         # Always test spawn, even on Linux CI. Fork must not double-install
         # inherited hooks where that start method is available.
-        for method in multiprocessing.get_all_start_methods():
-            with self.subTest(method=method):
+        import itertools
+        for method, scenario in itertools.product(multiprocessing.get_all_start_methods(), ("table", "model", "combined")):
+            with self.subTest(method=method, scenario=scenario):
                 result = subprocess.run(
-                    [sys.executable, str(fixture), method],
+                    [sys.executable, str(fixture), method, scenario],
                     check=False,
                     env=env,
                     capture_output=True,
@@ -48,8 +49,9 @@ class TableProcessTests(unittest.TestCase):
                 )
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 state = json.loads(result.stdout)
-                self.assertEqual(state["mode"], "fixed")
-                self.assertEqual(state["installs"], 1)
+                self.assertEqual(state["mode"], None if scenario == "model" else "fixed")
+                self.assertEqual(state["installs"], int(scenario != "model"))
+                self.assertEqual(state["modelInstalls"], int(scenario != "table"))
 
 
 class TableVersionFallbackTests(unittest.TestCase):

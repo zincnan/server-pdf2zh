@@ -3,10 +3,11 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import fitz
 from utils.config import Config
-from utils.pipeline import postprocess, task_environment
+from utils.pipeline import postprocess, task_environment, run_pipeline
 
 
 def make_pdf(path, labels, width=600):
@@ -63,6 +64,18 @@ class PipelineTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             with self.assertRaisesRegex(RuntimeError, '未生成'):
                 postprocess(Path(temp), Config({}), True, True, threading.Event())
+
+    def test_zero_exit_without_artifacts_surfaces_redacted_parameter_error(self):
+        def engine(command, directory, env, update, register, log, stopping):
+            log.write('Error 400: unsupported reasoning_effort xhigh; key=private-test-key')
+        with tempfile.TemporaryDirectory() as temp:
+            profile = {'provider': 'openaicompatible', 'apiUrl': 'http://localhost/v1',
+                       'apiKey': 'private-test-key', 'model': 'custom-alias'}
+            with patch('utils.pipeline.execute_with_progress', engine):
+                with self.assertRaisesRegex(RuntimeError, 'unsupported reasoning_effort') as caught:
+                    run_pipeline(Path(temp), {}, profile, lambda **v: None, lambda p: None, threading.Event())
+            self.assertNotIn('private-test-key', str(caught.exception))
+            self.assertFalse((Path(temp) / 'engine.toml').exists())
 
     def test_static_assets_linked_but_document_cache_is_not_shared(self):
         with tempfile.TemporaryDirectory() as temp:

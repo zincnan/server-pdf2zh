@@ -13,6 +13,8 @@ RUN python /opt/prepare_assets.py && \
     chmod -R a-w /opt/pdf2zh-assets && \
     useradd --uid 10001 --create-home pdftranslate && \
     mkdir -p /data && chown 10001:10001 /data
+LABEL org.opencontainers.image.title="PDF AI Translator" \
+    org.opencontainers.image.description="Self-hosted PDF translation with a browser interface"
 COPY server /app/server
 USER 10001:10001
 EXPOSE 7000

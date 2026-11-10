@@ -22,5 +22,5 @@ jobs:
           node-version: '22'
       - run: node --check server/static/app.js
       - run: docker compose config --quiet
-      - run: docker build -t pdf2zh-web:test .
-      - run: docker run --rm -e PYTHONPATH=/app/server -e RUN_TRANSLATION_INTEGRATION=1 pdf2zh-web:test python -m unittest tests.test_translation_integration -v
+      - run: docker build -t pdf-ai-translator-server:test .
+      - run: docker run --rm -e PYTHONPATH=/app/server -e RUN_TRANSLATION_INTEGRATION=1 pdf-ai-translator-server:test python -m unittest tests.test_translation_integration -v

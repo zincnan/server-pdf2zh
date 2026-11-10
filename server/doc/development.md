@@ -37,7 +37,7 @@ The integration test uses the real PDF engine and a local mock model endpoint. I
 
 `.github/workflows/ci.yml` runs on branch pushes, pull requests, and manual dispatch. Local commits do not trigger it. In the repository's **Actions** tab, open **CI** to inspect each named step. A newer run cancels an older run for the same branch or PR.
 
-The **Frontend and Compose** job checks every JavaScript file in `server/static/` and validates Compose using `.env.example`. If it passes, **Container and translation** builds the deployment image with a GitHub Actions layer cache. It runs the backend regression suite, the opt-in real PDF translation test, and an HTTP startup check on container port 7000. Tests run with external networking disabled; the integration test uses a model endpoint on container loopback and the assets already included in the image. No model credentials or registry login are required.
+The **Frontend and Compose** job checks every JavaScript file in `server/static/` and validates both `compose.yaml` (source build) and `compose.image.yaml` (published image) using `.env.example`. If it passes, **Container and translation** builds the deployment image with a GitHub Actions layer cache. It runs the backend regression suite, the opt-in real PDF translation test, and an HTTP startup check on container port 7000. Tests run with external networking disabled; the integration test uses a model endpoint on container loopback and the assets already included in the image. No model credentials or registry login are required.
 
 CI loads the image into the runner's local Docker engine for testing. It does not publish an image or update a server. Version tags continue to use the separate `release.yml` workflow.
 

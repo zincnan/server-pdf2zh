@@ -6,11 +6,17 @@
 
 ## 快速开始
 
-准备好 Docker 和 Docker Compose v2，在项目根目录执行：
+安装 Docker 和 Docker Compose v2。推荐使用已发布镜像，无需下载源码或本地构建，只需下载 [镜像部署配置](compose.image.yaml)，保存为 `compose.yaml`：
 
 ```sh
-docker compose up -d --build
+mkdir -p pdf-ai-translator
+cd pdf-ai-translator
+curl -fsSL https://raw.githubusercontent.com/zincnan/server-pdf2zh/main/compose.image.yaml -o compose.yaml
+docker compose pull
+docker compose up -d
 ```
+
+`docker compose pull` 会下载 `ghcr.io/zincnan/pdf-ai-translator-server:latest`，`up -d` 启动服务。无需单独执行 `docker pull`；不用 Compose 时，也可以使用 [docker run](server/doc/deployment.md#docker-without-compose)。
 
 打开 **http://127.0.0.1:7000**：
 
@@ -18,7 +24,9 @@ docker compose up -d --build
 2. 上传 PDF，选择参数，点击“开始翻译”。
 3. 完成后下载文件；不再需要时点击 `Clear` 或 `Clear all`。
 
-首次构建需要联网下载依赖、字体和版面模型。默认同时翻译 **2** 个任务，每份文件最多 **100 MiB**；默认启用自动 OCR，关闭自动术语提取。
+镜像已包含依赖、字体和版面模型；翻译时需能访问所选模型服务。默认同时翻译 **2** 个任务，每份文件最多 **100 MiB**；默认启用自动 OCR，关闭自动术语提取。
+
+当前发布镜像为 `linux/amd64`（Intel/AMD 64 位）；其他架构请使用源码构建。
 
 输出文件可多选，同时勾选“译文 PDF”和“双语 PDF”会生成两份文件。双语 PDF 可选“左右并排”或“交替分页”；裁剪选项主要适合双栏论文。
 
@@ -39,10 +47,16 @@ docker compose up -d --build
 
 ## 部署设置
 
-首次自定义配置时，将 `.env.example` 复制为 `.env` 并编辑，然后重新执行启动命令。
+默认配置无需 `.env`。需要自定义时，在 `compose.yaml` 同目录创建 `.env`，可参考 [.env.example](.env.example)，编辑后重新执行 `docker compose up -d`。例如，部署到远程服务器时设置：
+
+```dotenv
+BIND_ADDRESS=0.0.0.0
+ACCESS_PASSWORD=your-password
+```
 
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
+| `IMAGE` | `ghcr.io/zincnan/pdf-ai-translator-server:latest` | 仅镜像部署使用；可改为 `ghcr.io/zincnan/pdf-ai-translator-server:1.0.0` 固定版本 |
 | `BIND_ADDRESS` | `127.0.0.1` | 仅本机访问；设为 `0.0.0.0` 后允许远程访问并要求登录 |
 | `PORT` | `7000` | 宿主机端口 |
 | `ACCESS_PASSWORD` | `pdf2zh` | 远程访问密码 |
@@ -58,18 +72,27 @@ docker compose logs -f pdf-ai-translator-server  # 查看服务日志
 docker compose down                           # 停止服务，保留数据
 ```
 
-Compose 项目名为 `pdf-ai-translator`，服务名与容器名均为 `pdf-ai-translator-server`，镜像为 `pdf-ai-translator-server:latest`。
+Compose 项目名为 `pdf-ai-translator`，服务名与容器名均为 `pdf-ai-translator-server`。镜像部署使用 GHCR 镜像；源码构建生成本地镜像 `pdf-ai-translator-server:latest`。
+
+更新镜像部署：
+
+```sh
+docker compose pull
+docker compose up -d
+```
+
+固定版本时，先修改 `.env` 中的 `IMAGE`，再执行更新命令。更新会复用原数据卷。
 
 ## 离线部署
 
-在与服务器 CPU 架构相同的联网机器上构建并导出：
+在联网机器上拉取与目标服务器 CPU 架构匹配的镜像并导出：
 
 ```sh
-docker compose build
-docker save pdf-ai-translator-server:latest | gzip > pdf-ai-translator-server.tar.gz
+docker pull ghcr.io/zincnan/pdf-ai-translator-server:latest
+docker save ghcr.io/zincnan/pdf-ai-translator-server:latest | gzip > pdf-ai-translator-server.tar.gz
 ```
 
-将镜像包、`compose.yaml` 和按需配置的 `.env` 复制到服务器，再执行：
+将镜像包、[compose.image.yaml](compose.image.yaml) 和按需配置的 `.env` 复制到服务器，把 `compose.image.yaml` 保存为 `compose.yaml`，再执行：
 
 ```sh
 docker load -i pdf-ai-translator-server.tar.gz
@@ -90,6 +113,16 @@ docker compose up -d --no-build --pull never
 旧版模型配置会自动备份并迁移；不再支持的服务类型显示为“待转换”，编辑后再激活。
 
 ## 开发与来源
+
+从源码构建时，克隆仓库并使用根目录的 `compose.yaml`：
+
+```sh
+git clone https://github.com/zincnan/server-pdf2zh.git
+cd server-pdf2zh
+docker compose up -d --build
+```
+
+首次构建需要联网下载依赖、字体和版面模型。
 
 [开发与测试](server/doc/development.md) · [表格处理](server/doc/table-modes.md) · [参考文献跳过](server/doc/reference-skip.md)
 

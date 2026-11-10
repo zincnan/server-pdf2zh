@@ -45,8 +45,11 @@ jobs:
             node --check "$script"
           done
 
-      - name: Validate Docker Compose configuration
-        run: docker compose --env-file .env.example config --quiet
+      - name: Validate Docker Compose configurations
+        run: |
+          for compose in compose.yaml compose.image.yaml; do
+            docker compose --env-file .env.example -f "$compose" config --quiet
+          done
 
   test:
     name: Container and translation

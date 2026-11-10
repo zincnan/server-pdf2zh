@@ -6,11 +6,17 @@ A self-hosted PDF translation web app. Upload documents, choose a model service,
 
 ## Quick start
 
-Install Docker and Docker Compose v2, then run from the project root:
+Install Docker and Docker Compose v2. Use the published image without cloning or building the source: download the [image deployment configuration](compose.image.yaml) as `compose.yaml`:
 
 ```sh
-docker compose up -d --build
+mkdir -p pdf-ai-translator
+cd pdf-ai-translator
+curl -fsSL https://raw.githubusercontent.com/zincnan/server-pdf2zh/main/compose.image.yaml -o compose.yaml
+docker compose pull
+docker compose up -d
 ```
+
+`docker compose pull` downloads `ghcr.io/zincnan/pdf-ai-translator-server:latest`; `up -d` starts the service. A separate `docker pull` is unnecessary. Prefer plain Docker? See [docker run](server/doc/deployment.md#docker-without-compose).
 
 Open **http://127.0.0.1:7000**:
 
@@ -18,7 +24,9 @@ Open **http://127.0.0.1:7000**:
 2. Upload PDFs, choose translation options, and click **开始翻译** (Start translation).
 3. Download the results. Use `Clear` or `Clear all` when you no longer need the files.
 
-The first build needs internet access to download dependencies, fonts, and layout models. Defaults: **2** concurrent jobs, **100 MiB** per PDF, automatic OCR enabled, and automatic glossary extraction disabled.
+The image includes dependencies, fonts, and layout models. Translation still needs access to the selected model service. Defaults: **2** concurrent jobs, **100 MiB** per PDF, automatic OCR enabled, and automatic glossary extraction disabled.
+
+Published images currently target `linux/amd64` (64-bit Intel/AMD). Build from source for other architectures.
 
 Output types can be selected together: choosing both **译文 PDF** (translated PDF) and **双语 PDF** (bilingual PDF) produces two files. Bilingual layouts support side-by-side or alternating pages. The crop options split two-column papers into individual columns.
 
@@ -39,10 +47,16 @@ For Ollama's OpenAI-compatible API on the Docker host, use `http://host.docker.i
 
 ## Configuration
 
-To customize a new installation, copy `.env.example` to `.env`, edit it, and rerun the startup command.
+Defaults work without an `.env` file. To customize them, create `.env` beside `compose.yaml`, using [.env.example](.env.example) as a reference, then rerun `docker compose up -d`. For a remote server, for example:
+
+```dotenv
+BIND_ADDRESS=0.0.0.0
+ACCESS_PASSWORD=your-password
+```
 
 | Variable | Default | Description |
 | --- | --- | --- |
+| `IMAGE` | `ghcr.io/zincnan/pdf-ai-translator-server:latest` | Image deployment only; use `ghcr.io/zincnan/pdf-ai-translator-server:1.0.0` to pin a version |
 | `BIND_ADDRESS` | `127.0.0.1` | Local access only; `0.0.0.0` enables remote access and requires login |
 | `PORT` | `7000` | Host port |
 | `ACCESS_PASSWORD` | `pdf2zh` | Remote access password |
@@ -58,18 +72,27 @@ docker compose logs -f pdf-ai-translator-server  # View service logs
 docker compose down                           # Stop without deleting data
 ```
 
-The Compose project is `pdf-ai-translator`. Both the service and container are named `pdf-ai-translator-server`. The image is `pdf-ai-translator-server:latest`.
+The Compose project is `pdf-ai-translator`. Both the service and container are named `pdf-ai-translator-server`. Image deployments use GHCR; source builds produce the local image `pdf-ai-translator-server:latest`.
+
+Update an image deployment:
+
+```sh
+docker compose pull
+docker compose up -d
+```
+
+For a pinned version, change `IMAGE` in `.env` first. Updates reuse the existing data volume.
 
 ## Offline deployment
 
-Build and export on an internet-connected machine with the same CPU architecture as the server:
+Pull an image matching the server's CPU architecture on an internet-connected machine and export it:
 
 ```sh
-docker compose build
-docker save pdf-ai-translator-server:latest | gzip > pdf-ai-translator-server.tar.gz
+docker pull ghcr.io/zincnan/pdf-ai-translator-server:latest
+docker save ghcr.io/zincnan/pdf-ai-translator-server:latest | gzip > pdf-ai-translator-server.tar.gz
 ```
 
-Copy the image archive, `compose.yaml`, and your optional `.env` to the server, then run:
+Copy the image archive, [compose.image.yaml](compose.image.yaml), and your optional `.env` to the server. Save `compose.image.yaml` as `compose.yaml`, then run:
 
 ```sh
 docker load -i pdf-ai-translator-server.tar.gz
@@ -90,6 +113,16 @@ The default volume, **`pdf-ai-translator-data`**, is mounted at `/data`. It stor
 Older model configurations are backed up and migrated automatically. Unsupported service types remain available for manual conversion before activation.
 
 ## Development and credits
+
+To build from source, clone the repository and use its root `compose.yaml`:
+
+```sh
+git clone https://github.com/zincnan/server-pdf2zh.git
+cd server-pdf2zh
+docker compose up -d --build
+```
+
+The first build needs internet access to download dependencies, fonts, and layout models.
 
 [Development and tests](server/doc/development.md) · [Table handling](server/doc/table-modes.md) · [Reference skipping](server/doc/reference-skip.md)
 

@@ -6,19 +6,27 @@
 
 ## 快速开始
 
-安装 Docker 和 Docker Compose v2。推荐使用已发布镜像，无需下载源码或本地构建，只需下载 [镜像部署配置](compose.image.yaml)，保存为 `compose.yaml`：
+安装 Docker 和 Docker Compose v2。推荐使用已发布镜像，无需下载源码或本地构建。首次部署时，下载 [镜像部署配置](compose.image.yaml) 保存为 `compose.yaml`，并下载 [.env.example](.env.example) 保存为 `.env`：
 
 ```sh
 mkdir -p pdf-ai-translator
 cd pdf-ai-translator
 curl -fsSL https://raw.githubusercontent.com/zincnan/server-pdf2zh/main/compose.image.yaml -o compose.yaml
+test -f .env || curl -fsSL https://raw.githubusercontent.com/zincnan/server-pdf2zh/main/.env.example -o .env
+```
+
+**启动前编辑 `.env`**：`PORT` 设置访问端口；`BIND_ADDRESS=127.0.0.1` 仅本机访问，改为 `0.0.0.0` 可供局域网访问；`ACCESS_PASSWORD` 设置登录密码。[配置示例](#部署设置)
+
+保存后启动：
+
+```sh
 docker compose pull
 docker compose up -d
 ```
 
 `docker compose pull` 会下载 `ghcr.io/zincnan/pdf-ai-translator-server:latest`，`up -d` 启动服务。无需单独执行 `docker pull`；不用 Compose 时，也可以使用 [docker run](server/doc/deployment.md#docker-without-compose)。
 
-打开 **http://127.0.0.1:7000**：
+默认打开 **http://127.0.0.1:7000**；局域网访问使用 `http://服务器IP:端口`，端口与 `.env` 中的 `PORT` 一致：
 
 1. 在“模型服务”中添加配置并激活。
 2. 上传 PDF，选择参数，点击“开始翻译”。
@@ -26,7 +34,7 @@ docker compose up -d
 
 镜像已包含依赖、字体和版面模型；翻译时需能访问所选模型服务。默认同时翻译 **2** 个任务，每份文件最多 **100 MiB**；默认启用自动 OCR，关闭自动术语提取。
 
-当前发布镜像为 `linux/amd64`（Intel/AMD 64 位）；其他架构请使用源码构建。
+发布流程分别构建并测试 `linux/amd64`（Intel/AMD 64 位）和 `linux/arm64`，再合并为同一镜像标签，Docker 会自动选择架构。旧的单架构镜像需重新发布后才支持 ARM64。
 
 输出文件可多选，同时勾选“译文 PDF”和“双语 PDF”会生成两份文件。双语 PDF 可选“左右并排”或“交替分页”；裁剪选项主要适合双栏论文。
 
@@ -47,12 +55,15 @@ docker compose up -d
 
 ## 部署设置
 
-默认配置无需 `.env`。需要自定义时，在 `compose.yaml` 同目录创建 `.env`，可参考 [.env.example](.env.example)，编辑后重新执行 `docker compose up -d`。例如，部署到远程服务器时设置：
+Compose 会自动读取 `compose.yaml` 同目录的 `.env`，无需修改 Compose 文件。快速开始已下载模板；以下示例允许局域网访问，并把访问端口改为 **8080**：
 
 ```dotenv
 BIND_ADDRESS=0.0.0.0
+PORT=8080
 ACCESS_PASSWORD=your-password
 ```
+
+修改保存后执行 `docker compose up -d`，然后访问 `http://服务器IP:8080`，使用配置的密码登录。`PORT` 只改变宿主机访问端口，容器内部仍使用 7000。
 
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
@@ -65,7 +76,7 @@ ACCESS_PASSWORD=your-password
 | `SHUTDOWN_GRACE_SECONDS` | `600` | 停止服务时等待任务的秒数 |
 | `COOKIE_SECURE` | `false` | 通过 HTTPS 访问时设为 `true` |
 
-远程访问地址为 `http://服务器IP:7000`。使用反向代理时保持页面和 API 同源，为 `/events` 关闭缓冲并允许长连接。
+使用反向代理时保持页面和 API 同源，为 `/events` 关闭缓冲并允许长连接。
 
 ```sh
 docker compose logs -f pdf-ai-translator-server  # 查看服务日志
@@ -85,14 +96,14 @@ docker compose up -d
 
 ## 离线部署
 
-在联网机器上拉取与目标服务器 CPU 架构匹配的镜像并导出：
+在联网机器上指定目标服务器架构并导出镜像。下例目标为 ARM64；AMD64 服务器请将 `linux/arm64` 改为 `linux/amd64`：
 
 ```sh
-docker pull ghcr.io/zincnan/pdf-ai-translator-server:latest
+docker pull --platform linux/arm64 ghcr.io/zincnan/pdf-ai-translator-server:latest
 docker save ghcr.io/zincnan/pdf-ai-translator-server:latest | gzip > pdf-ai-translator-server.tar.gz
 ```
 
-将镜像包、[compose.image.yaml](compose.image.yaml) 和按需配置的 `.env` 复制到服务器，把 `compose.image.yaml` 保存为 `compose.yaml`，再执行：
+将镜像包、[compose.image.yaml](compose.image.yaml) 和配置好的 `.env` 复制到服务器，把 `compose.image.yaml` 保存为 `compose.yaml`，再执行：
 
 ```sh
 docker load -i pdf-ai-translator-server.tar.gz
@@ -119,6 +130,7 @@ docker compose up -d --no-build --pull never
 ```sh
 git clone https://github.com/zincnan/server-pdf2zh.git
 cd server-pdf2zh
+test -f .env || cp .env.example .env
 docker compose up -d --build
 ```
 

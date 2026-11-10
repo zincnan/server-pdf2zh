@@ -6,19 +6,27 @@ A self-hosted PDF translation web app. Upload documents, choose a model service,
 
 ## Quick start
 
-Install Docker and Docker Compose v2. Use the published image without cloning or building the source: download the [image deployment configuration](compose.image.yaml) as `compose.yaml`:
+Install Docker and Docker Compose v2. Use the published image without cloning or building the source. For a new installation, download the [image deployment configuration](compose.image.yaml) as `compose.yaml` and [.env.example](.env.example) as `.env`:
 
 ```sh
 mkdir -p pdf-ai-translator
 cd pdf-ai-translator
 curl -fsSL https://raw.githubusercontent.com/zincnan/server-pdf2zh/main/compose.image.yaml -o compose.yaml
+test -f .env || curl -fsSL https://raw.githubusercontent.com/zincnan/server-pdf2zh/main/.env.example -o .env
+```
+
+**Edit `.env` before starting**: `PORT` sets the host port; `BIND_ADDRESS=127.0.0.1` allows local access, while `0.0.0.0` enables LAN access; `ACCESS_PASSWORD` sets the login password. [Configuration example](#configuration)
+
+Save the file, then start:
+
+```sh
 docker compose pull
 docker compose up -d
 ```
 
 `docker compose pull` downloads `ghcr.io/zincnan/pdf-ai-translator-server:latest`; `up -d` starts the service. A separate `docker pull` is unnecessary. Prefer plain Docker? See [docker run](server/doc/deployment.md#docker-without-compose).
 
-Open **http://127.0.0.1:7000**:
+The default address is **http://127.0.0.1:7000**. For LAN access, open `http://SERVER_IP:PORT`, using the `PORT` from `.env`:
 
 1. Open **模型服务** (Model services), add a configuration, and activate it.
 2. Upload PDFs, choose translation options, and click **开始翻译** (Start translation).
@@ -26,7 +34,7 @@ Open **http://127.0.0.1:7000**:
 
 The image includes dependencies, fonts, and layout models. Translation still needs access to the selected model service. Defaults: **2** concurrent jobs, **100 MiB** per PDF, automatic OCR enabled, and automatic glossary extraction disabled.
 
-Published images currently target `linux/amd64` (64-bit Intel/AMD). Build from source for other architectures.
+The release workflow builds and tests `linux/amd64` (64-bit Intel/AMD) and `linux/arm64`, then combines them under the same image tags. Docker selects the matching architecture automatically. Older single-architecture images must be republished before ARM64 can pull them.
 
 Output types can be selected together: choosing both **译文 PDF** (translated PDF) and **双语 PDF** (bilingual PDF) produces two files. Bilingual layouts support side-by-side or alternating pages. The crop options split two-column papers into individual columns.
 
@@ -47,12 +55,15 @@ For Ollama's OpenAI-compatible API on the Docker host, use `http://host.docker.i
 
 ## Configuration
 
-Defaults work without an `.env` file. To customize them, create `.env` beside `compose.yaml`, using [.env.example](.env.example) as a reference, then rerun `docker compose up -d`. For a remote server, for example:
+Compose automatically reads `.env` beside `compose.yaml`; the quick start downloads the template for you. This example enables LAN access and changes the host port to **8080**, without editing the Compose file:
 
 ```dotenv
 BIND_ADDRESS=0.0.0.0
+PORT=8080
 ACCESS_PASSWORD=your-password
 ```
+
+Save the changes and run `docker compose up -d`, then open `http://SERVER_IP:8080` and log in with the configured password. `PORT` changes the host port; the container continues to listen on 7000.
 
 | Variable | Default | Description |
 | --- | --- | --- |
@@ -65,7 +76,7 @@ ACCESS_PASSWORD=your-password
 | `SHUTDOWN_GRACE_SECONDS` | `600` | Seconds to wait for running jobs during shutdown |
 | `COOKIE_SECURE` | `false` | Set to `true` when accessing over HTTPS |
 
-For remote access, open `http://SERVER_IP:7000`. With a reverse proxy, keep the page and API on the same origin, disable buffering for `/events`, and allow long-lived connections.
+With a reverse proxy, keep the page and API on the same origin, disable buffering for `/events`, and allow long-lived connections.
 
 ```sh
 docker compose logs -f pdf-ai-translator-server  # View service logs
@@ -85,14 +96,14 @@ For a pinned version, change `IMAGE` in `.env` first. Updates reuse the existing
 
 ## Offline deployment
 
-Pull an image matching the server's CPU architecture on an internet-connected machine and export it:
+On an internet-connected machine, specify the target server's architecture before exporting the image. This example targets ARM64; substitute `linux/amd64` for an AMD64 server:
 
 ```sh
-docker pull ghcr.io/zincnan/pdf-ai-translator-server:latest
+docker pull --platform linux/arm64 ghcr.io/zincnan/pdf-ai-translator-server:latest
 docker save ghcr.io/zincnan/pdf-ai-translator-server:latest | gzip > pdf-ai-translator-server.tar.gz
 ```
 
-Copy the image archive, [compose.image.yaml](compose.image.yaml), and your optional `.env` to the server. Save `compose.image.yaml` as `compose.yaml`, then run:
+Copy the image archive, [compose.image.yaml](compose.image.yaml), and your configured `.env` to the server. Save `compose.image.yaml` as `compose.yaml`, then run:
 
 ```sh
 docker load -i pdf-ai-translator-server.tar.gz
@@ -119,6 +130,7 @@ To build from source, clone the repository and use its root `compose.yaml`:
 ```sh
 git clone https://github.com/zincnan/server-pdf2zh.git
 cd server-pdf2zh
+test -f .env || cp .env.example .env
 docker compose up -d --build
 ```
 

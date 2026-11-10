@@ -41,6 +41,22 @@ The **Frontend and Compose** job checks every JavaScript file in `server/static/
 
 CI loads the image into the runner's local Docker engine for testing. It does not publish an image or update a server. Version tags continue to use the separate `release.yml` workflow.
 
+## Multi-platform releases
+
+`release.yml` still starts on pushed `v*` tags. It prepares shared image metadata, then builds `linux/amd64` on `ubuntu-24.04` and `linux/arm64` on `ubuntu-24.04-arm`. Both are native builds, using the same Dockerfile, dependency lock, and asset preparation. The pinned Python base digest is a multi-platform index containing both architectures. Build caches are separated by architecture.
+
+Architecture images are initially uploaded to GHCR by digest without version tags. Each runner pulls its exact digest, checks the image architecture, runs the complete regression suite with the real translation integration enabled, and checks HTTP startup on port 7000. Tests use container loopback for the mock model and have external networking disabled.
+
+Only successful builds upload their tested digests as workflow artifacts. The publish job waits for both architectures, checks the candidate manifest contains AMD64 and ARM64, and only then updates the version and `latest` tags. It merges the tested digests without rebuilding them and verifies both published platforms. Failed architecture tests leave existing release tags unchanged. Re-running the same version tag cancels the older release run; digest artifacts are retained for three days.
+
+After a successful release, inspect the platforms with Buildx:
+
+```sh
+docker buildx imagetools inspect ghcr.io/zincnan/pdf-ai-translator-server:latest
+```
+
+ARM64 servers can keep the existing `compose.image.yaml` and run `docker compose pull` followed by `docker compose up -d`. Previously published single-platform tags do not gain ARM64 support until this release workflow has completed successfully.
+
 ## Translation preferences
 
 `GET /api/preferences` returns `{ "translationOptions": { ... } }`. `PATCH /api/preferences` accepts the same envelope with a partial options object and returns the merged settings. These single-user preferences live in `/data/config/preferences.json`, separately from jobs and model credentials. Missing fields inherit engine defaults. Empty output selections are valid drafts; job submission still requires a PDF output.

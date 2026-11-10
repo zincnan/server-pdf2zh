@@ -1,40 +1,230 @@
 name: Container release
+
 on:
   push:
     tags: ['v*']
+
 permissions:
   contents: read
   packages: write
+
+# 同一版本标签重新推送时，停止旧流程，避免旧构建覆盖新镜像。
+concurrency:
+  group: release-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
 jobs:
-  image:
-    runs-on: ubuntu-latest
+  prepare:
+    name: Prepare image metadata
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      image: ${{ steps.image.outputs.name }}
+      metadata: ${{ steps.metadata.outputs.json }}
+      labels: ${{ steps.metadata.outputs.labels }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
+      - name: Check out source
+        uses: actions/checkout@v7
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - uses: docker/metadata-action@v5
+          persist-credentials: false
+
+      - name: Normalize registry image name
+        id: image
+        run: printf 'name=ghcr.io/%s/pdf-ai-translator-server\n' "${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
+
+      - name: Generate release tags and labels
+        uses: docker/metadata-action@v6
         id: metadata
         with:
-          images: ghcr.io/${{ github.repository_owner }}/pdf-ai-translator-server
+          images: ${{ steps.image.outputs.name }}
           labels: |
             org.opencontainers.image.title=PDF AI Translator
             org.opencontainers.image.description=Self-hosted PDF translation with a browser interface
           tags: |
             type=semver,pattern={{version}}
             type=raw,value=latest
-      - uses: docker/build-push-action@v6
+
+  build:
+    name: Build and test (${{ matrix.arch }})
+    needs: prepare
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    env:
+      IMAGE_NAME: ${{ needs.prepare.outputs.image }}
+      PLATFORM: ${{ matrix.platform }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # 原生构建每种架构；先上传无版本标签的产物，正式标签在测试后合并。
+      - name: Build architecture image by digest
+        id: build
+        uses: docker/build-push-action@v7
+        timeout-minutes: 30
         with:
           context: .
-          load: true
-          tags: pdf-ai-translator-server:release-test
-      - run: docker run --rm -e PYTHONPATH=/app/server -e RUN_TRANSLATION_INTEGRATION=1 pdf-ai-translator-server:release-test python -m unittest discover -s /app/server/tests -p 'test_*.py'
-      - uses: docker/build-push-action@v6
+          file: Dockerfile
+          platforms: ${{ matrix.platform }}
+          labels: ${{ needs.prepare.outputs.labels }}
+          outputs: type=image,name=${{ needs.prepare.outputs.image }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: |
+            type=gha,scope=pdf-ai-translator-release-${{ matrix.arch }}
+            type=gha,scope=pdf-ai-translator-ci
+          cache-to: type=gha,scope=pdf-ai-translator-release-${{ matrix.arch }},mode=max,ignore-error=true
+
+      - name: Pull the exact image and verify architecture
+        id: image
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          reference="$IMAGE_NAME@$DIGEST"
+          docker pull --platform "$PLATFORM" "$reference"
+          actual=$(docker image inspect "$reference" --format '{{.Os}}/{{.Architecture}}')
+          [[ "$actual" == "$PLATFORM" ]]
+          printf 'ref=%s\n' "$reference" >> "$GITHUB_OUTPUT"
+
+      # 两种架构都运行完整测试，含真实引擎与本地模拟模型的 PDF 翻译。
+      - name: Run full suite with real PDF translation
+        timeout-minutes: 15
+        env:
+          IMAGE_REF: ${{ steps.image.outputs.ref }}
+        run: |
+          docker run --rm --init --network none --platform "$PLATFORM" \
+            --env PYTHONPATH=/app/server \
+            --env RUN_TRANSLATION_INTEGRATION=1 \
+            "$IMAGE_REF" \
+            python -m unittest discover -s /app/server/tests -p 'test_*.py' -v
+
+      - name: Check service startup on port 7000
+        timeout-minutes: 3
+        env:
+          IMAGE_REF: ${{ steps.image.outputs.ref }}
+        run: |
+          container=$(docker run --detach --init --network none --platform "$PLATFORM" "$IMAGE_REF")
+          trap 'docker logs "$container"; docker rm --force "$container" >/dev/null' EXIT
+          for attempt in {1..30}; do
+            if docker exec "$container" python -c \
+              'import json, urllib.request; data = json.load(urllib.request.urlopen("http://127.0.0.1:7000/health", timeout=2)); assert data["status"] == "ok" and data["product"] == "PDF AI Translator"; print("Service is healthy on port 7000")' 2>/dev/null; then
+              exit 0
+            fi
+            printf 'Waiting for service startup (%s/30)\n' "$attempt"
+            sleep 2
+          done
+          printf 'Service did not become healthy\n' >&2
+          exit 1
+
+      - name: Record tested image digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/digests"
+          printf '%s\n' "$DIGEST" > "$RUNNER_TEMP/digests/$ARCH"
+
+      - name: Upload tested image digest
+        uses: actions/upload-artifact@v7
         with:
-          context: .
-          push: true
-          tags: ${{ steps.metadata.outputs.tags }}
-          labels: ${{ steps.metadata.outputs.labels }}
+          name: image-digest-${{ matrix.arch }}
+          path: ${{ runner.temp }}/digests/${{ matrix.arch }}
+          if-no-files-found: error
+          retention-days: 3
+          overwrite: true
+
+  publish:
+    name: Publish multi-platform image
+    needs: [prepare, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      IMAGE_NAME: ${{ needs.prepare.outputs.image }}
+      RELEASE_METADATA: ${{ needs.prepare.outputs.metadata }}
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download both tested digests
+        uses: actions/download-artifact@v8
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: image-digest-*
+          merge-multiple: true
+
+      # 先检查候选清单包含两种架构，再更新版本号和 latest；不重新构建镜像。
+      - name: Merge tested images and verify both architectures
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import re
+          import subprocess
+
+          image = os.environ['IMAGE_NAME']
+          folder = Path(os.environ['RUNNER_TEMP']) / 'digests'
+          required = {('linux', 'amd64'), ('linux', 'arm64')}
+          if {path.name for path in folder.iterdir()} != {'amd64', 'arm64'}:
+              raise SystemExit('Both tested image digests are required')
+          references = []
+          for arch in ('amd64', 'arm64'):
+              digest = (folder / arch).read_text().strip()
+              if not re.fullmatch(r'sha256:[0-9a-f]{64}', digest):
+                  raise SystemExit(f'Invalid digest for {arch}')
+              references.append(f'{image}@{digest}')
+          tags = json.loads(os.environ['RELEASE_METADATA'])['tags']
+          if not tags or any(not tag.startswith(image + ':') for tag in tags):
+              raise SystemExit('Invalid release image tags')
+
+          def verify(manifest):
+              platforms = set()
+              for entry in manifest.get('manifests', []):
+                  platform = entry.get('platform', {})
+                  if platform.get('os') == 'unknown':
+                      continue  # Build attestations have no runnable platform.
+                  platforms.add((platform.get('os'), platform.get('architecture')))
+              if platforms != required:
+                  raise SystemExit(f'Expected AMD64 and ARM64, got {platforms}')
+
+          command = ['docker', 'buildx', 'imagetools']
+          candidate = subprocess.check_output([*command, 'create', '--dry-run', *references], text=True)
+          verify(json.loads(candidate))
+          tag_options = [value for tag in tags for value in ('--tag', tag)]
+          subprocess.run([*command, 'create', *tag_options, *references], check=True)
+          for tag in tags:
+              published = subprocess.check_output([*command, 'inspect', '--raw', tag], text=True)
+              verify(json.loads(published))
+              print(f'Published {tag}: linux/amd64, linux/arm64', flush=True)
+          PY

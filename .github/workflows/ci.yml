@@ -1,26 +1,112 @@
 name: CI
-on: [push, pull_request]
+
+# 分支推送、PR 和手动运行会触发 CI；版本标签由 release.yml 处理。
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
 permissions:
   contents: read
+
+# 同一分支或 PR 有新提交时，取消还在运行的旧检查。
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  CI_IMAGE: pdf-ai-translator-server:ci
+
 jobs:
-  test:
-    runs-on: ubuntu-latest
+  checks:
+    name: Frontend and Compose
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - name: Check out source
+        uses: actions/checkout@v7
         with:
-          python-version: '3.12'
-      - uses: astral-sh/setup-uv@v6
-        with:
-          version: '0.9.4'
-      - run: uv pip install --system --override server/overrides.txt -r server/requirements.txt
-      - run: python -m unittest discover -s server/tests -p 'test_*.py' -v
-        env:
-          PYTHONPATH: server
-      - uses: actions/setup-node@v4
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
         with:
           node-version: '22'
-      - run: node --check server/static/app.js
-      - run: docker compose config --quiet
-      - run: docker build -t pdf-ai-translator-server:test .
-      - run: docker run --rm -e PYTHONPATH=/app/server -e RUN_TRANSLATION_INTEGRATION=1 pdf-ai-translator-server:test python -m unittest tests.test_translation_integration -v
+          package-manager-cache: false
+
+      - name: Check every frontend JavaScript file
+        run: |
+          for script in server/static/*.js; do
+            node --check "$script"
+          done
+
+      - name: Validate Docker Compose configuration
+        run: docker compose --env-file .env.example config --quiet
+
+  test:
+    name: Container and translation
+    needs: checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      # 复用依赖、字体和版面模型的构建层；CI 只生成本地测试镜像。
+      - name: Build the application image
+        uses: docker/build-push-action@v7
+        timeout-minutes: 30
+        with:
+          context: .
+          file: Dockerfile
+          load: true
+          push: false
+          tags: ${{ env.CI_IMAGE }}
+          cache-from: type=gha,scope=pdf-ai-translator-ci
+          cache-to: ${{ github.event_name != 'pull_request' && 'type=gha,scope=pdf-ai-translator-ci,mode=max,ignore-error=true' || '' }}
+
+      # 直接使用部署镜像中的 Python 3.12 和锁定依赖，避免两套测试环境。
+      - name: Run backend regression tests
+        timeout-minutes: 10
+        run: |
+          docker run --rm --init --network none \
+            --env PYTHONPATH=/app/server \
+            --env RUN_TRANSLATION_INTEGRATION=0 \
+            "$CI_IMAGE" \
+            python -m unittest discover -s /app/server/tests -p 'test_*.py' -v
+
+      # 使用真实 PDF 引擎和容器内的模拟模型接口，无需 API Key 或外网。
+      - name: Test PDF translation, download, restart and cleanup
+        timeout-minutes: 15
+        run: |
+          docker run --rm --init --network none \
+            --env PYTHONPATH=/app/server \
+            --env RUN_TRANSLATION_INTEGRATION=1 \
+            "$CI_IMAGE" \
+            python -m unittest tests.test_translation_integration -v
+
+      - name: Check service startup on port 7000
+        timeout-minutes: 3
+        run: |
+          container=$(docker run --detach --init --network none "$CI_IMAGE")
+          trap 'docker logs "$container"; docker rm --force "$container" >/dev/null' EXIT
+          for attempt in {1..30}; do
+            if docker exec "$container" python -c \
+              'import json, urllib.request; data = json.load(urllib.request.urlopen("http://127.0.0.1:7000/health", timeout=2)); assert data["status"] == "ok" and data["product"] == "PDF AI Translator"; print("Service is healthy on port 7000")' 2>/dev/null; then
+              exit 0
+            fi
+            printf 'Waiting for service startup (%s/30)\n' "$attempt"
+            sleep 2
+          done
+          printf 'Service did not become healthy\n' >&2
+          exit 1

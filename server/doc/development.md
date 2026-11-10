@@ -37,7 +37,7 @@ The integration test uses the real PDF engine and a local mock model endpoint. I
 
 `GET /api/preferences` returns `{ "translationOptions": { ... } }`. `PATCH /api/preferences` accepts the same envelope with a partial options object and returns the merged settings. These single-user preferences live in `/data/config/preferences.json`, separately from jobs and model credentials. Missing fields inherit engine defaults. Empty output selections are valid drafts; job submission still requires a PDF output.
 
-The browser saves valid changes automatically and displays the save state. Numeric fields debounce for 300 ms and flush on blur or page exit. Optional `writerId` and positive integer `sequence` fields identify updates from one page; the server ignores older updates to fields already saved at a higher sequence. This prevents a delayed request from reverting newer edits sent during a reload. Ordinary API clients can omit both fields. Ordering metadata is bounded in memory and is not part of the saved preferences.
+The browser saves valid changes automatically and only displays validation or save errors. Numeric fields debounce for 300 ms and flush on blur or page exit. Optional `writerId` and positive integer `sequence` fields identify updates from one page; the server ignores older updates to fields already saved at a higher sequence. This prevents a delayed request from reverting newer edits sent during a reload. Ordinary API clients can omit both fields. Ordering metadata is bounded in memory and is not part of the saved preferences.
 
 ## Naming
 

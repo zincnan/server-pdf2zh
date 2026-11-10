@@ -70,7 +70,8 @@ function updateOutputControls() {
     : $('dual-mode').value === 'LR' ? '同一页内左右并排显示原文与译文。'
     : '原文和译文各占一页，交替排列。';
 }
-function preferenceStatus(message, error = false) {
+function preferenceStatus(message = '', error = false) {
+  $('preference-save').hidden = !error;
   $('preference-status').textContent = message;
   $('preference-status').className = error ? 'error' : '';
   $('retry-preferences').hidden = !error || !Object.keys(pendingPreferences).length;
@@ -98,10 +99,10 @@ function queuePreference(input, immediate) {
   if (value !== savedPreferences[input.name] || savingPreferences) pendingPreferences[input.name] = value;
   else delete pendingPreferences[input.name];
   if (!Object.keys(pendingPreferences).length) {
-    if (!savingPreferences && !hasInvalidPreference()) preferenceStatus('设置已保存');
+    if (!savingPreferences && !hasInvalidPreference()) preferenceStatus();
     return;
   }
-  preferenceStatus('正在保存设置…');
+  preferenceStatus();
   if (immediate) void savePreferences();
   else preferenceTimer = setTimeout(() => {void savePreferences();}, 300);
 }
@@ -111,7 +112,7 @@ async function savePreferences() {
   const changes = pendingPreferences;
   pendingPreferences = {};
   savingPreferences = changes;
-  preferenceStatus('正在保存设置…');
+  preferenceStatus();
   let succeeded = false;
   try {
     const result = await api('/api/preferences', {method: 'PATCH', body: JSON.stringify({translationOptions: changes,
@@ -126,7 +127,7 @@ async function savePreferences() {
     savingPreferences = null;
     if (succeeded) {
       if (Object.keys(pendingPreferences).length) void savePreferences();
-      else preferenceStatus(hasInvalidPreference() ? '请输入有效数值；此项尚未保存' : '设置已保存', hasInvalidPreference());
+      else preferenceStatus(hasInvalidPreference() ? '请输入有效数值；此项尚未保存' : '', hasInvalidPreference());
     }
   }
 }
@@ -291,7 +292,7 @@ async function enterWorkspace(sessionState) {
   }
   savedPreferences = preferences.translationOptions;
   for (const picker of languagePickers.values()) picker.sync();
-  preferenceStatus('设置已保存');
+  preferenceStatus();
   $('upload-help').textContent = `每份最大 ${Math.round(capabilities.maxUploadBytes / 1024 / 1024)} MB · 关闭页面后翻译仍会继续`;
   $('login-view').hidden = true; $('workspace').hidden = false; $('logout').hidden = !sessionState.required;
   updateOutputControls(); editService(null); await loadServices(); await loadTasks(); connectEvents();

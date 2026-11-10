@@ -118,7 +118,7 @@ class WebTests(unittest.TestCase):
 
     def test_authentication_guards_every_data_endpoint(self):
         self.app.config['AUTH_REQUIRED'] = True
-        for path in ('/api/model-services', '/api/tasks', '/api/capabilities', '/events', '/api/tasks/id/files/id'):
+        for path in ('/api/model-services', '/api/preferences', '/api/tasks', '/api/capabilities', '/events', '/api/tasks/id/files/id'):
             self.assertEqual(self.client.get(path).status_code, 401)
         self.assertEqual(self.client.get('/health').status_code, 200)
         self.assertEqual(self.client.post('/api/session', json={'password': 'pdf2zh'}).status_code, 403)
@@ -150,6 +150,39 @@ class WebTests(unittest.TestCase):
         text = self.client.get('/health').get_data(as_text=True)
         self.assertNotIn(self.temp.name, text)
         self.assertNotIn('outputDir', text)
+
+    def test_preferences_api_preserves_task_snapshot_and_survives_clear_and_restart(self):
+        self.assertTrue(self.client.get('/api/preferences').json['translationOptions']['mono'])
+        response = self.client.patch('/api/preferences', headers=HEADERS,
+                                     json={'translationOptions': {'mono': False, 'dualMode': 'TB', 'targetLang': 'de'}})
+        self.assertEqual(response.status_code, 200)
+        options = response.json['translationOptions']
+        task = wait_for(self.manager, self.submit(options=options).json['taskId'])
+        self.client.patch('/api/preferences', headers=HEADERS, json={'translationOptions': {'targetLang': 'fr'}})
+        self.assertEqual(self.manager.get(task['id'])['options']['targetLang'], 'de')
+        self.assertEqual(self.client.delete('/api/tasks', headers=HEADERS).status_code, 200)
+        self.assertEqual(self.client.get('/api/preferences').json['translationOptions']['targetLang'], 'fr')
+        self.manager.shutdown(2)
+        restarted = create_app({'TESTING': True, 'DATA_DIR': self.temp.name, 'AUTH_REQUIRED': False,
+                                'TASK_RUNNER': completed_runner})
+        self.addCleanup(lambda: restarted.extensions['tasks'].shutdown(2))
+        restored = restarted.test_client().get('/api/preferences').json['translationOptions']
+        self.assertFalse(restored['mono'])
+        self.assertEqual(restored['dualMode'], 'TB')
+        self.assertEqual(restored['targetLang'], 'fr')
+        self.assertEqual(len(restarted.test_client().get('/api/model-services').json['services']), 1)
+
+    def test_preferences_api_rejects_invalid_and_cross_origin_updates(self):
+        before = self.client.get('/api/preferences').json
+        body = {'translationOptions': {'mono': False}}
+        self.assertEqual(self.client.patch('/api/preferences', json=body).status_code, 403)
+        self.assertEqual(self.client.patch('/api/preferences', headers={**HEADERS, 'Origin': 'http://evil.test'},
+                                          json=body).status_code, 403)
+        self.assertEqual(self.client.patch('/api/preferences', headers=HEADERS,
+                                          json={'translationOptions': {'apiKey': 'secret'}}).status_code, 400)
+        self.assertEqual(self.client.get('/api/preferences').json, before)
+        self.app.config['AUTH_REQUIRED'] = True
+        self.assertEqual(self.client.patch('/api/preferences', headers=HEADERS, json=body).status_code, 401)
 
     def test_language_catalog_works_with_request_validation(self):
         response = self.client.get('/api/capabilities')

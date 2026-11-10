@@ -25,7 +25,7 @@ DEFAULTS = {
 OUTPUTS = ('mono', 'dual', 'mono_cut', 'dual_cut', 'compare', 'crop_compare')
 
 
-def validate_options(data):
+def validate_options(data, *, require_output=True):
     if not isinstance(data, dict) or set(data) - set(DEFAULTS):
         raise ValueError('翻译参数包含不支持的字段')
     result = copy.deepcopy(DEFAULTS)
@@ -54,7 +54,7 @@ def validate_options(data):
     if result['dualMode'] not in ('LR', 'TB') or result['fontFamily'] not in ('auto', 'serif', 'sans-serif', 'script'):
         raise ValueError('布局或字体选项无效')
     parse_table_mode(result['tableMode'])
-    if not any(result[key] for key in OUTPUTS):
+    if require_output and not any(result[key] for key in OUTPUTS):
         raise ValueError('请至少选择一种 PDF 输出')
     return result
 

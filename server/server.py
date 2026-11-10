@@ -12,6 +12,7 @@ from flask import Flask, Response, jsonify, request, send_file, session
 from werkzeug.exceptions import HTTPException, RequestEntityTooLarge
 from utils.config import DEFAULTS, validate_options
 from utils.languages import LANGUAGES
+from utils.preferences import PreferenceStore
 from utils.services import ServiceStore, provider_catalog
 from utils.model_policy import EFFORTS, MODEL_RULES
 from utils.storage import atomic_json, read_json
@@ -55,10 +56,11 @@ def create_app(config=None):
             atomic_json(secret_path, {'secret': secrets.token_hex(32)})
         app.secret_key = read_json(secret_path)['secret']
         services = ServiceStore(config_dir / 'services.json')
+        preferences = PreferenceStore(config_dir / 'preferences.json')
     except Exception:
         manager.shutdown(0)
         raise
-    app.extensions.update(tasks=manager, model_services=services)
+    app.extensions.update(tasks=manager, model_services=services, preferences=preferences)
     login_failures = {}
     login_lock = threading.Lock()
 
@@ -145,6 +147,12 @@ def create_app(config=None):
                        engine='pdf2zh_next', providers=provider_catalog(), defaults=DEFAULTS, languages=LANGUAGES,
                        modelRules=MODEL_RULES, reasoningEfforts=EFFORTS,
                        maxUploadBytes=app.config['MAX_FILE_BYTES'], concurrency=app.config['MAX_WORKERS'])
+
+    @app.route('/api/preferences', methods=['GET', 'PATCH'])
+    def translation_preferences():
+        if request.method == 'GET':
+            return jsonify(preferences.get())
+        return jsonify(preferences.patch(json_body()))
 
     @app.route('/api/model-services', methods=['GET', 'POST'])
     def model_services():

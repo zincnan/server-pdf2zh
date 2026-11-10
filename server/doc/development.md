@@ -25,12 +25,19 @@ uv venv --python 3.12 .venv-test
 uv pip install --python .venv-test/bin/python --override server/overrides.txt -r server/requirements.txt
 PYTHONPATH=server .venv-test/bin/python -m unittest discover -s server/tests -p 'test_*.py' -v
 node --check server/static/app.js
+node --check server/static/language-picker.js
 docker compose config --quiet
 docker build -t pdf-ai-translator-server:latest .
 docker run --rm -e PYTHONPATH=/app/server -e RUN_TRANSLATION_INTEGRATION=1 pdf-ai-translator-server:latest python -m unittest tests.test_translation_integration -v
 ```
 
 The integration test uses the real PDF engine and a local mock model endpoint. It does not call a paid API. Static assets are prepared while building the image. Service request mutations require the `X-PDF-AI-Translator-Request: 1` header; access authentication also applies when enabled.
+
+## Translation preferences
+
+`GET /api/preferences` returns `{ "translationOptions": { ... } }`. `PATCH /api/preferences` accepts the same envelope with a partial options object and returns the merged settings. These single-user preferences live in `/data/config/preferences.json`, separately from jobs and model credentials. Missing fields inherit engine defaults. Empty output selections are valid drafts; job submission still requires a PDF output.
+
+The browser saves valid changes automatically and displays the save state. Numeric fields debounce for 300 ms and flush on blur or page exit. Optional `writerId` and positive integer `sequence` fields identify updates from one page; the server ignores older updates to fields already saved at a higher sequence. This prevents a delayed request from reverting newer edits sent during a reload. Ordinary API clients can omit both fields. Ordering metadata is bounded in memory and is not part of the saved preferences.
 
 ## Naming
 

@@ -3,10 +3,10 @@
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="application-name" content="PDF AI Translator">
-  <meta name="description" content="私有部署的 PDF 翻译工作台。配置模型、上传文档、查看进度并下载译文。">
+  <meta name="description" content="人工智能多语种 PDF 全文翻译，保留原文排版，支持超长文档。">
   <title>PDF AI Translator · 翻译工作台</title>
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/static/app.css"><script src="/static/app.js" defer></script>
+  <link rel="stylesheet" href="/static/app.css"><script src="/static/language-picker.js" defer></script><script src="/static/app.js" defer></script>
 </head>
 <body>
   <div id="login-view" class="login-wrap" hidden>
@@ -24,8 +24,7 @@
       <div class="top-actions"><span id="connection" class="connection">正在连接</span><button id="manage-services" type="button">模型服务</button><button id="logout" class="quiet" type="button" hidden>退出</button></div>
     </header>
     <main>
-      <div class="page-heading"><div><p class="eyebrow">你的文档，你的翻译服务</p><h1>把阅读留给自己。</h1><p class="muted">上传 PDF，保留排版，下载译文与双语对照。</p></div><span class="engine-tag">PDFMathTranslate Next</span></div>
-      <div id="notice" class="notice" role="status" hidden></div>
+      <div class="page-heading"><h1>跨越语言，看见世界</h1><p class="muted">人工智能多语种 PDF 全文翻译，保留原文排版，支持超长文档。</p></div>
       <div class="work-grid">
         <section class="panel compose-panel" aria-labelledby="compose-title">
           <div class="section-heading"><h2 id="compose-title">新建翻译</h2><span class="step-label">01 / 上传与配置</span></div>
@@ -52,18 +51,23 @@
             </div></details>
             <button id="submit-task" type="submit" class="primary full">开始翻译 <span aria-hidden="true">→</span></button>
             <p id="upload-help" class="form-footnote">关闭页面后，翻译仍会继续。</p>
+            <div class="preference-save"><span id="preference-status" role="status">正在读取设置…</span><button id="retry-preferences" type="button" class="quiet" hidden>重试保存</button></div>
           </form>
         </section>
-        <section class="tasks-panel" aria-labelledby="tasks-title"><div class="section-heading"><div><h2 id="tasks-title">翻译任务 <span id="task-count" class="count">0</span></h2><p id="task-stats" class="muted small">结果保留到手动清理</p></div><button id="clear-all" class="quiet danger-text" type="button">Clear all</button></div>
+        <section class="tasks-panel" aria-labelledby="tasks-title"><div class="section-heading"><h2 id="tasks-title">翻译任务 <span id="task-count" class="count">0</span></h2><button id="clear-all" class="quiet danger-text" type="button">Clear all</button></div>
           <div class="task-filters" role="group" aria-label="筛选任务"><button type="button" data-filter="all" aria-pressed="true">全部</button><button type="button" data-filter="active" aria-pressed="false">进行中</button><button type="button" data-filter="finished" aria-pressed="false">已结束</button></div>
-          <div id="tasks-list"></div><div id="empty-state" class="empty-state"><span class="empty-pages" aria-hidden="true">A / 文</span><h3>下一份读物，从这里开始</h3><p>上传一份 PDF，翻译进度和下载文件会显示在这里。</p></div>
-          <p class="tasks-footnote">Clear 仅删除已结束任务的全部文件与记录，不影响模型服务。重启中断的任务可以手动重试。</p>
+          <div id="tasks-list"></div><div id="empty-state" class="empty-state"><span class="empty-pages" aria-hidden="true">A / 文</span><h3>下一份读物，从这里开始</h3><p>上传 PDF，查看进度并下载结果。</p></div>
         </section>
       </div>
     </main><footer><span>PDF AI Translator</span><span>独立部署 · 文件由你管理</span></footer>
   </div>
-  <dialog id="services-dialog" aria-labelledby="services-title"><div class="dialog-head"><div><p class="eyebrow">连接你自己的模型</p><h2 id="services-title">模型服务</h2></div><button id="close-services" type="button">关闭</button></div><p class="muted small">配置与密钥保存在服务端。激活的服务用于新提交的翻译。</p><p id="services-warning" class="notice small" hidden></p><div id="services-list" class="services-list"></div><hr>
+  <dialog id="services-dialog" aria-labelledby="services-title"><div class="dialog-head"><h2 id="services-title">模型服务</h2><button id="close-services" type="button">关闭</button></div><p class="muted small">配置与密钥保存在服务端。激活的服务用于新提交的翻译。</p><p id="services-warning" class="notice small" hidden></p><div id="services-list" class="services-list"></div><hr>
     <form id="service-form"><input id="service-id" type="hidden"><h3 id="service-form-title">添加模型服务</h3><div class="field-grid"><label>服务名称<input id="service-name" required maxlength="120" placeholder="例如：我的 DeepSeek"></label><div><label for="provider">服务商</label><select id="provider" required></select></div></div><div id="provider-fields"></div><div id="model-controls"></div><div class="dialog-actions"><button id="new-service" type="button">新建配置</button><button type="submit" class="primary">保存配置</button></div><p id="service-error" class="error" role="alert"></p></form>
   </dialog>
+  <dialog id="confirm-dialog" class="confirm-dialog" aria-labelledby="confirm-title" aria-describedby="confirm-message">
+    <h2 id="confirm-title"></h2><p id="confirm-message" class="muted"></p>
+    <form method="dialog" class="confirm-actions"><button id="confirm-cancel" value="cancel" autofocus>取消</button><button id="confirm-submit" value="confirm" class="primary">确认清理</button></form>
+  </dialog>
+  <div id="notice" class="notice" popover="manual" hidden><span id="notice-message" role="status" aria-live="polite" aria-atomic="true"></span><button id="close-notice" type="button" class="quiet" aria-label="关闭提示">×</button></div>
 </body>
 </html>

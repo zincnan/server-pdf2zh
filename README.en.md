@@ -22,7 +22,9 @@ The first build needs internet access to download dependencies, fonts, and layou
 
 Output types can be selected together: choosing both **译文 PDF** (translated PDF) and **双语 PDF** (bilingual PDF) produces two files. Bilingual layouts support side-by-side or alternating pages. The crop options split two-column papers into individual columns.
 
-Choose source and target languages from dropdowns with Chinese labels and all 153 language options listed by the engine. Common languages appear first; the default is English → Simplified Chinese. Results depend on the selected model and the engine's font and layout support.
+Choose source and target languages from searchable dropdowns with Chinese labels and all 153 language options listed by the engine. Search by Chinese name or language code. Common languages appear first; the default is English → Simplified Chinese. Results depend on the selected model and the engine's font and layout support.
+
+Translation options save automatically on the server. Once **设置已保存** (Settings saved) appears, languages, output types, layouts, and advanced options survive page reloads and service restarts. `Clear` does not remove preferences. This is currently a single-user service; all browsers load the same saved settings.
 
 ## Model services
 

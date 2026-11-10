@@ -6,8 +6,52 @@ const outputLabels = {mono: '译文 PDF', dual: '双语 PDF', mono_cut: '裁剪�
 const visibleOutputs = ['mono', 'dual', 'mono_cut', 'dual_cut', 'crop_compare'];
 const advanced = {transFirst: '译文在前', noWatermark: '不添加水印', ocr: '启用 OCR 兼容', autoOcr: '自动启用 OCR', skipReferences: '跳过参考文献', translateTableText: '原生表格文字翻译', saveGlossary: '导出术语表', disableGlossary: '关闭自动术语提取', ignoreCache: '忽略翻译缓存', skipClean: '跳过 PDF 清理', enhanceCompatibility: '增强兼容性', disableRichTextTranslate: '关闭富文本翻译', onlyIncludeTranslatedPage: '仅包含已翻译页面'};
 let capabilities, serviceData = {activeId: null, services: []}, tasks = [], filter = 'all', events, pollTimer, editing = null, noticeTimer;
+let savedPreferences = null, pendingPreferences = {}, savingPreferences = null, preferenceTimer;
+const preferenceWriter = Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
+let preferenceSequence = 0;
+const languagePickers = new Map(['source-language', 'target-language'].map((id) => [id, new LanguagePicker($(id))]));
+let resolveConfirmation = null;
 function element(tag, text, className) {const el = document.createElement(tag); if (text !== undefined) el.textContent = text; if (className) el.className = className; return el;}
-function notice(message, error = false) {$('notice').textContent = message; $('notice').className = `notice${error ? ' error' : ''}`; $('notice').hidden = false; clearTimeout(noticeTimer); noticeTimer = setTimeout(() => {$('notice').hidden = true;}, 10000);}
+function closeNotice() {
+  clearTimeout(noticeTimer);
+  if ($('notice').hidePopover && $('notice').matches(':popover-open')) $('notice').hidePopover();
+  $('notice').hidden = true;
+}
+function presentNotice() {
+  const box = $('notice'), parent = Array.from(document.querySelectorAll('dialog[open]')).at(-1) || document.body;
+  // A toast outside a modal's DOM subtree would be inert even in the top layer.
+  if (box.parentElement !== parent) {
+    if (box.hidePopover && box.matches(':popover-open')) box.hidePopover();
+    parent.append(box);
+  }
+  box.hidden = false;
+  if (box.showPopover && !box.matches(':popover-open')) box.showPopover();
+}
+function notice(message, error = false) {
+  const box = $('notice'), text = $('notice-message');
+  text.setAttribute('role', error ? 'alert' : 'status');
+  text.setAttribute('aria-live', error ? 'assertive' : 'polite');
+  text.textContent = message;
+  box.className = `notice${error ? ' error' : ''}`;
+  presentNotice();
+  clearTimeout(noticeTimer); noticeTimer = setTimeout(closeNotice, error ? 8000 : 3000);
+}
+function confirmAction({title, message, confirmLabel = '确认清理', trigger = document.activeElement}) {
+  if ($('confirm-dialog').open) return Promise.resolve(false);
+  LanguagePicker.opened?.close(); closeNotice();
+  $('confirm-title').textContent = title;
+  $('confirm-message').textContent = message;
+  $('confirm-submit').textContent = confirmLabel;
+  $('confirm-dialog').returnValue = '';
+  return new Promise((resolve) => {
+    resolveConfirmation = (confirmed) => {
+      resolve(confirmed);
+      // Action buttons are enabled by their finally handler before focus returns.
+      setTimeout(() => {if (trigger?.isConnected && !trigger.disabled) trigger.focus({preventScroll: true});}, 0);
+    };
+    $('confirm-dialog').showModal(); $('confirm-cancel').focus();
+  });
+}
 async function api(path, options = {}) {
   const headers = {'X-PDF-AI-Translator-Request': '1', ...(options.headers || {})};
   if (options.body && !(options.body instanceof FormData)) headers['Content-Type'] = 'application/json';
@@ -17,14 +61,84 @@ async function api(path, options = {}) {
   if (!response.ok) throw new Error(result?.error || `请求失败 (${response.status})`);
   return result;
 }
-function showLogin() {events?.close(); clearInterval(pollTimer); $('workspace').hidden = true; $('login-view').hidden = false; $('services-dialog').close(); $('access-password').focus();}
-function actionButton(text, action, className) {const button = element('button', text, className); button.type = 'button'; button.addEventListener('click', async () => {button.disabled = true; try {await action();} catch (error) {notice(error.message, true);} finally {button.disabled = false;}}); return button;}
+function showLogin() {events?.close(); clearInterval(pollTimer); clearTimeout(preferenceTimer); savedPreferences = null; LanguagePicker.opened?.close(); closeNotice(); $('confirm-dialog').close('cancel'); $('workspace').hidden = true; $('login-view').hidden = false; $('services-dialog').close(); $('access-password').focus();}
+function actionButton(text, action, className) {const button = element('button', text, className); button.type = 'button'; button.addEventListener('click', async () => {button.disabled = true; try {await action(button);} catch (error) {notice(error.message, true);} finally {button.disabled = false;}}); return button;}
 function updateOutputControls() {
   const dual = $('output-dual').checked;
   $('dual-mode').disabled = !dual;
   $('dual-layout-help').textContent = !dual ? '勾选“双语 PDF”后可选择布局。'
     : $('dual-mode').value === 'LR' ? '同一页内左右并排显示原文与译文。'
     : '原文和译文各占一页，交替排列。';
+}
+function preferenceStatus(message, error = false) {
+  $('preference-status').textContent = message;
+  $('preference-status').className = error ? 'error' : '';
+  $('retry-preferences').hidden = !error || !Object.keys(pendingPreferences).length;
+}
+function preferenceInput(input) {return savedPreferences && input.name && Object.hasOwn(savedPreferences, input.name);}
+function readPreference(input) {
+  if (input.type === 'checkbox') return input.checked;
+  if (input.type === 'number') return input.value === '' || !input.validity.valid ? undefined : Number(input.value);
+  return input.validity.valid ? input.value : undefined;
+}
+function hasInvalidPreference() {
+  return Array.from($('translate-form').elements).some((input) => preferenceInput(input) && readPreference(input) === undefined);
+}
+function queuePreference(input, immediate) {
+  if (!preferenceInput(input)) return;
+  const value = readPreference(input);
+  clearTimeout(preferenceTimer);
+  if (value === undefined) {
+    delete pendingPreferences[input.name];
+    preferenceStatus('请输入有效数值；此项尚未保存', true);
+    // Other valid edits can still be saved while this field is being corrected.
+    if (Object.keys(pendingPreferences).length) void savePreferences();
+    return;
+  }
+  if (value !== savedPreferences[input.name] || savingPreferences) pendingPreferences[input.name] = value;
+  else delete pendingPreferences[input.name];
+  if (!Object.keys(pendingPreferences).length) {
+    if (!savingPreferences && !hasInvalidPreference()) preferenceStatus('设置已保存');
+    return;
+  }
+  preferenceStatus('正在保存设置…');
+  if (immediate) void savePreferences();
+  else preferenceTimer = setTimeout(() => {void savePreferences();}, 300);
+}
+async function savePreferences() {
+  clearTimeout(preferenceTimer);
+  if (!savedPreferences || savingPreferences || !Object.keys(pendingPreferences).length) return;
+  const changes = pendingPreferences;
+  pendingPreferences = {};
+  savingPreferences = changes;
+  preferenceStatus('正在保存设置…');
+  let succeeded = false;
+  try {
+    const result = await api('/api/preferences', {method: 'PATCH', body: JSON.stringify({translationOptions: changes,
+      writerId: preferenceWriter, sequence: ++preferenceSequence}), keepalive: true});
+    if (!savedPreferences) return;
+    savedPreferences = result.translationOptions;
+    succeeded = true;
+  } catch (error) {
+    pendingPreferences = {...changes, ...pendingPreferences};
+    preferenceStatus('设置保存失败：' + error.message, true);
+  } finally {
+    savingPreferences = null;
+    if (succeeded) {
+      if (Object.keys(pendingPreferences).length) void savePreferences();
+      else preferenceStatus(hasInvalidPreference() ? '请输入有效数值；此项尚未保存' : '设置已保存', hasInvalidPreference());
+    }
+  }
+}
+function flushPreferencesOnLeave() {
+  clearTimeout(preferenceTimer);
+  if (!savedPreferences || (!savingPreferences && !Object.keys(pendingPreferences).length)) return;
+  // A separate keepalive transfers unsent edits before this document is discarded.
+  // Include in-flight values; the sequence prevents a delayed old save reverting them.
+  const changes = {...savingPreferences, ...pendingPreferences};
+  void fetch('/api/preferences', {method: 'PATCH', credentials: 'same-origin', keepalive: true,
+    headers: {'X-PDF-AI-Translator-Request': '1', 'Content-Type': 'application/json'},
+    body: JSON.stringify({translationOptions: changes, writerId: preferenceWriter, sequence: ++preferenceSequence})}).catch(() => {});
 }
 async function loadServices() {
   serviceData = await api('/api/model-services');
@@ -48,7 +162,11 @@ function renderServices() {
     description.append(element('strong', profile.name + (profile.needsConversion ? ' · 待转换' : active ? ' · 当前激活' : '')),
       element('span', `${provider?.label || profile.provider}${profile.model ? ' / ' + profile.model : ''}${profile.hasApiKey ? ' · 已保存密钥' : ''}`)); row.append(description);
     if (!active && !profile.needsConversion) row.append(actionButton('激活', async () => {await api(`/api/model-services/${profile.id}/active`, {method: 'PUT'}); await loadServices();}));
-    row.append(actionButton(profile.needsConversion ? '转换' : '编辑', () => editService(profile)), actionButton('删除', async () => {if (!confirm(`删除模型服务“${profile.name}”？已提交任务不受影响。`)) return; await api(`/api/model-services/${profile.id}`, {method: 'DELETE'}); if (editing?.id === profile.id) editService(null); await loadServices();})); list.append(row);
+    row.append(actionButton(profile.needsConversion ? '转换' : '编辑', () => editService(profile)), actionButton('删除', async (trigger) => {
+      if (!await confirmAction({title: '删除模型服务？', message: `删除“${profile.name}”配置，已提交的任务不受影响。`, confirmLabel: '确认删除', trigger})) return;
+      await api(`/api/model-services/${profile.id}`, {method: 'DELETE'}); if (editing?.id === profile.id) editService(null); await loadServices(); notice('模型服务已删除');
+      if (document.activeElement === document.body) $('new-service').focus({preventScroll: true});
+    })); list.append(row);
   }
 }
 function inferModel(model) {
@@ -116,11 +234,9 @@ function editService(profile) {
   $('service-form-title').textContent = profile?.needsConversion ? '转换旧配置' : profile ? '编辑模型服务' : '添加模型服务';
   $('service-error').textContent = ''; providerFields();
 }
-async function openServices(fresh = false) {if (fresh) editService(null); await loadServices(); if (!$('services-dialog').open) $('services-dialog').showModal();}
+async function openServices(fresh = false) {LanguagePicker.opened?.close(); if (fresh) editService(null); await loadServices(); if (!$('services-dialog').open) $('services-dialog').showModal();}
 function renderTasks() {
   $('task-count').textContent = tasks.length;
-  const active = tasks.filter((t) => !terminal.has(t.state)).length;
-  $('task-stats').textContent = active ? `${active} 个进行中 · 最多同时执行 ${capabilities.concurrency} 个` : '结果保留到手动清理';
   const shown = tasks.filter((t) => filter === 'all' || (filter === 'active' ? !terminal.has(t.state) : terminal.has(t.state)));
   $('empty-state').hidden = shown.length > 0; $('tasks-list').replaceChildren();
   for (const task of shown) {
@@ -139,7 +255,11 @@ function renderTasks() {
     }
     if (terminal.has(task.state)) {
       if (task.canRetry) actions.append(actionButton('重新翻译', async () => {await api(`/api/tasks/${task.id}/retry`, {method: 'POST'}); await loadTasks(); notice('已使用当前激活模型服务创建新任务');}));
-      actions.append(actionButton('Clear', async () => {if (!confirm(`清理“${task.fileName}”的原文、译文及全部任务数据？`)) return; await api(`/api/tasks/${task.id}`, {method: 'DELETE'}); await loadTasks();}, 'quiet danger-text clear-task'));
+      actions.append(actionButton('Clear', async (trigger) => {
+        if (!await confirmAction({title: '清理此任务？', message: `删除“${task.fileName}”的文件和记录。`, trigger})) return;
+        await api(`/api/tasks/${task.id}`, {method: 'DELETE'}); await loadTasks(); notice('任务已清理');
+        if (document.activeElement === document.body) $('clear-all').focus({preventScroll: true});
+      }, 'quiet danger-text clear-task'));
     }
     card.append(actions); $('tasks-list').append(card);
   }
@@ -155,24 +275,43 @@ function connectEvents() {
   clearInterval(pollTimer); pollTimer = setInterval(async () => {try {await loadTasks();} catch (error) {if (!$('workspace').hidden) {$('connection').textContent = '连接中断'; $('connection').className = 'connection offline';}}}, 10000);
 }
 async function enterWorkspace(sessionState) {
+  savedPreferences = null; pendingPreferences = {}; clearTimeout(preferenceTimer);
   capabilities = await api('/api/capabilities');
   for (const id of ['source-language', 'target-language']) {
     const select = $(id), previous = select.value;
-    select.replaceChildren();
-    for (const language of capabilities.languages) {const option = element('option', language.label); option.value = language.code; select.append(option);}
+    languagePickers.get(id).setOptions(capabilities.languages);
     select.value = capabilities.languages.some((language) => language.code === previous) ? previous : capabilities.defaults[select.name];
   }
   $('provider').replaceChildren(); for (const provider of capabilities.providers) {const option = element('option', provider.label); option.value = provider.id; $('provider').append(option);}
   $('advanced-checks').replaceChildren(); for (const [name, label] of Object.entries(advanced)) {const row = element('label', label, 'check'); const checkbox = element('input'); checkbox.type = 'checkbox'; checkbox.name = name; checkbox.checked = capabilities.defaults[name]; row.prepend(checkbox); $('advanced-checks').append(row);}
+  const preferences = await api('/api/preferences');
+  for (const input of $('translate-form').elements) if (Object.hasOwn(preferences.translationOptions, input.name)) {
+    if (input.type === 'checkbox') input.checked = preferences.translationOptions[input.name];
+    else input.value = preferences.translationOptions[input.name];
+  }
+  savedPreferences = preferences.translationOptions;
+  for (const picker of languagePickers.values()) picker.sync();
+  preferenceStatus('设置已保存');
   $('upload-help').textContent = `每份最大 ${Math.round(capabilities.maxUploadBytes / 1024 / 1024)} MB · 关闭页面后翻译仍会继续`;
   $('login-view').hidden = true; $('workspace').hidden = false; $('logout').hidden = !sessionState.required;
   updateOutputControls(); editService(null); await loadServices(); await loadTasks(); connectEvents();
 }
 $('login-form').addEventListener('submit', async (event) => {event.preventDefault(); try {const state = await api('/api/session', {method: 'POST', body: JSON.stringify({password: $('access-password').value})}); $('access-password').value = ''; await enterWorkspace(state);} catch (error) {$('login-error').textContent = error.message;}});
-$('logout').addEventListener('click', async () => {await api('/api/session', {method: 'DELETE'}); showLogin();});
+$('logout').addEventListener('click', async () => {flushPreferencesOnLeave(); await api('/api/session', {method: 'DELETE'}); showLogin();});
 $('manage-services').addEventListener('click', () => openServices().catch((e) => notice(e.message, true)));
 $('add-service').addEventListener('click', () => openServices(true).catch((e) => notice(e.message, true)));
 $('close-services').addEventListener('click', () => $('services-dialog').close());
+$('services-dialog').addEventListener('close', () => {if (!$('notice').hidden) presentNotice();});
+$('close-notice').addEventListener('click', closeNotice);
+$('confirm-dialog').addEventListener('close', () => {
+  const resolve = resolveConfirmation; resolveConfirmation = null;
+  resolve?.($('confirm-dialog').returnValue === 'confirm');
+});
+$('confirm-dialog').addEventListener('click', (event) => {
+  if (event.target !== $('confirm-dialog')) return;
+  const rect = $('confirm-dialog').getBoundingClientRect();
+  if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) $('confirm-dialog').close('cancel');
+});
 $('new-service').addEventListener('click', () => editService(null)); $('provider').addEventListener('change', providerFields);
 $('active-service').addEventListener('change', async () => {try {if ($('active-service').value) await api(`/api/model-services/${$('active-service').value}/active`, {method: 'PUT'}); await loadServices();} catch (error) {notice(error.message, true);}});
 $('service-form').addEventListener('submit', async (event) => {
@@ -197,6 +336,11 @@ function showFiles() {$('selected-files').textContent = Array.from($('pdf-files'
 $('pdf-files').addEventListener('change', showFiles);
 $('output-dual').addEventListener('change', updateOutputControls);
 $('dual-mode').addEventListener('change', updateOutputControls);
+$('translate-form').addEventListener('input', (event) => {if (event.target.type === 'number') queuePreference(event.target, false);});
+$('translate-form').addEventListener('change', (event) => queuePreference(event.target, true));
+$('translate-form').addEventListener('focusout', (event) => {if (event.target.type === 'number') queuePreference(event.target, true);});
+$('retry-preferences').addEventListener('click', () => {void savePreferences();});
+window.addEventListener('pagehide', flushPreferencesOnLeave);
 for (const name of ['dragenter', 'dragover']) $('dropzone').addEventListener(name, (event) => {event.preventDefault(); $('dropzone').classList.add('dragging');});
 for (const name of ['dragleave', 'drop']) $('dropzone').addEventListener(name, (event) => {event.preventDefault(); $('dropzone').classList.remove('dragging'); if (name === 'drop' && event.dataTransfer.files.length) {$('pdf-files').files = event.dataTransfer.files; showFiles();}});
 $('translate-form').addEventListener('submit', async (event) => {
@@ -213,7 +357,21 @@ $('translate-form').addEventListener('submit', async (event) => {
     if (!failed.length) {$('pdf-files').value = ''; showFiles();}
   } catch (error) {notice(error.message, true);} finally {button.disabled = !serviceData.activeId;}
 });
-$('clear-all').addEventListener('click', async () => {if (!confirm('清理全部已结束任务及其文件？运行中和下载中的任务会保留，模型配置不受影响。')) return; try {const result = await api('/api/tasks', {method: 'DELETE'}); await loadTasks(); notice(`已清理 ${result.cleared.length} 个任务，跳过 ${result.skipped.length} 个，失败 ${result.failed.length} 个`, result.failed.length > 0);} catch (error) {notice(error.message, true);}});
+$('clear-all').addEventListener('click', async () => {
+  const button = $('clear-all');
+  if (!await confirmAction({title: '清理已结束任务？', message: '删除已结束任务的文件和记录，不影响进行中的任务。', trigger: button})) return;
+  button.disabled = true;
+  try {
+    const result = await api('/api/tasks', {method: 'DELETE'}); await loadTasks();
+    let message = result.cleared.length ? `已清理 ${result.cleared.length} 个任务` : '暂无可清理的任务';
+    if (result.failed.length) message = `已清理 ${result.cleared.length} 个任务，${result.failed.length} 个未能清理，请重试`;
+    if (result.skipped.length) message += '；运行中或下载中的任务已保留';
+    notice(message, result.failed.length > 0);
+  } catch (error) {notice(error.message, true);} finally {
+    button.disabled = false;
+    if (document.activeElement === document.body && !$('workspace').hidden) button.focus({preventScroll: true});
+  }
+});
 document.querySelectorAll('[data-filter]').forEach((button) => button.addEventListener('click', () => {filter = button.dataset.filter; document.querySelectorAll('[data-filter]').forEach((b) => b.setAttribute('aria-pressed', String(b === button))); renderTasks();}));
 setInterval(updateTimers, 1000);
 (async () => {try {const state = await api('/api/session'); if (state.authenticated) await enterWorkspace(state); else showLogin();} catch (error) {showLogin(); $('login-error').textContent = '服务连接失败：' + error.message;}})();

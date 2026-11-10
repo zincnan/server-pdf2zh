@@ -2,9 +2,9 @@
 
 ## Published image deployment
 
-推荐使用 [README 的快速开始](../../README.md#快速开始)：下载 [compose.image.yaml](../../compose.image.yaml) 保存为 `compose.yaml`，同时下载 [.env.example](../../.env.example) 保存为 `.env`，不需要源码或 Dockerfile。启动前编辑 `.env` 中的 `PORT`、`BIND_ADDRESS` 和 `ACCESS_PASSWORD`；Compose 会自动读取它。`docker compose pull` 下载镜像，`docker compose up -d` 创建并启动容器。镜像默认使用 `ghcr.io/zincnan/pdf-ai-translator-server:latest`；在 `.env` 中设置 `IMAGE=ghcr.io/zincnan/pdf-ai-translator-server:1.0.0` 可固定版本。
+推荐使用 [README 的快速开始](../../README.md#快速开始)：下载 [compose.image.yaml](../../compose.image.yaml) 保存为 `compose.yaml`，同时下载 [.env.example](../../.env.example) 保存为 `.env`，不需要源码或 Dockerfile。直接执行 `docker compose pull` 下载镜像、`docker compose up -d` 启动服务。如需修改端口、访问范围或密码，再编辑 `.env` 中的 `PORT`、`BIND_ADDRESS` 和 `ACCESS_PASSWORD`，保存后执行 `docker compose up -d` 应用配置。镜像默认使用 `ghcr.io/zincnan/pdf-ai-translator-server:latest`；在 `.env` 中设置 `IMAGE=ghcr.io/zincnan/pdf-ai-translator-server:1.0.0` 可固定版本。
 
-Use the [README quick start](../../README.en.md#quick-start): download [compose.image.yaml](../../compose.image.yaml) as `compose.yaml` and [.env.example](../../.env.example) as `.env`. Source code and a Dockerfile are unnecessary. Edit `PORT`, `BIND_ADDRESS`, and `ACCESS_PASSWORD` before starting; Compose reads `.env` automatically. Run `docker compose pull` followed by `docker compose up -d`. The default image is `ghcr.io/zincnan/pdf-ai-translator-server:latest`; set `IMAGE` in `.env` to pin a version.
+Use the [README quick start](../../README.en.md#quick-start): download [compose.image.yaml](../../compose.image.yaml) as `compose.yaml` and [.env.example](../../.env.example) as `.env`. Source code and a Dockerfile are unnecessary. Run `docker compose pull` followed by `docker compose up -d` with the defaults. To change the port, access scope, or password, edit `PORT`, `BIND_ADDRESS`, and `ACCESS_PASSWORD` in `.env`, save it, and run `docker compose up -d` to apply the changes. The default image is `ghcr.io/zincnan/pdf-ai-translator-server:latest`; set `IMAGE` in `.env` to pin a version.
 
 维护者发布镜像后，需确保 GHCR 包的可见性为 **Public**，其他人才能免登录拉取。公开 GitHub 仓库与公开镜像包是两个独立设置。发布流程将 `linux/amd64` 和 `linux/arm64` 合并为同一标签，Docker 自动选择服务器架构；旧的单架构镜像需完成新一轮发布后才支持 ARM64。
 

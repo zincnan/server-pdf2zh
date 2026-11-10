@@ -13,24 +13,23 @@ mkdir -p pdf-ai-translator
 cd pdf-ai-translator
 curl -fsSL https://raw.githubusercontent.com/zincnan/server-pdf2zh/main/compose.image.yaml -o compose.yaml
 test -f .env || curl -fsSL https://raw.githubusercontent.com/zincnan/server-pdf2zh/main/.env.example -o .env
-```
-
-**Edit `.env` before starting**: `PORT` sets the host port; `BIND_ADDRESS=127.0.0.1` allows local access, while `0.0.0.0` enables LAN access; `ACCESS_PASSWORD` sets the login password. [Configuration example](#configuration)
-
-Save the file, then start:
-
-```sh
 docker compose pull
 docker compose up -d
 ```
 
 `docker compose pull` downloads `ghcr.io/zincnan/pdf-ai-translator-server:latest`; `up -d` starts the service. A separate `docker pull` is unnecessary. Prefer plain Docker? See [docker run](server/doc/deployment.md#docker-without-compose).
 
-The default address is **http://127.0.0.1:7000**. For LAN access, open `http://SERVER_IP:PORT`, using the `PORT` from `.env`:
+Open **http://127.0.0.1:7000**:
 
 1. Open **模型服务** (Model services), add a configuration, and activate it.
 2. Upload PDFs, choose translation options, and click **开始翻译** (Start translation).
 3. Download the results. Use `Clear` or `Clear all` when you no longer need the files.
+
+To change the port, enable LAN access, or change the login password, edit `.env` in the same directory as needed. See [Configuration](#configuration). After saving, apply the changes with the following command; Compose recreates containers whose configuration changed and preserves the data volume:
+
+```sh
+docker compose up -d
+```
 
 The image includes dependencies, fonts, and layout models. Translation still needs access to the selected model service. Defaults: **2** concurrent jobs, **100 MiB** per PDF, automatic OCR enabled, and automatic glossary extraction disabled.
 

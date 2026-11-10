@@ -13,24 +13,23 @@ mkdir -p pdf-ai-translator
 cd pdf-ai-translator
 curl -fsSL https://raw.githubusercontent.com/zincnan/server-pdf2zh/main/compose.image.yaml -o compose.yaml
 test -f .env || curl -fsSL https://raw.githubusercontent.com/zincnan/server-pdf2zh/main/.env.example -o .env
-```
-
-**启动前编辑 `.env`**：`PORT` 设置访问端口；`BIND_ADDRESS=127.0.0.1` 仅本机访问，改为 `0.0.0.0` 可供局域网访问；`ACCESS_PASSWORD` 设置登录密码。[配置示例](#部署设置)
-
-保存后启动：
-
-```sh
 docker compose pull
 docker compose up -d
 ```
 
 `docker compose pull` 会下载 `ghcr.io/zincnan/pdf-ai-translator-server:latest`，`up -d` 启动服务。无需单独执行 `docker pull`；不用 Compose 时，也可以使用 [docker run](server/doc/deployment.md#docker-without-compose)。
 
-默认打开 **http://127.0.0.1:7000**；局域网访问使用 `http://服务器IP:端口`，端口与 `.env` 中的 `PORT` 一致：
+打开 **http://127.0.0.1:7000**：
 
 1. 在“模型服务”中添加配置并激活。
 2. 上传 PDF，选择参数，点击“开始翻译”。
 3. 完成后下载文件；不再需要时点击 `Clear` 或 `Clear all`。
+
+如需修改端口、开启局域网访问或更改登录密码，再编辑同目录的 `.env`，具体见[部署设置](#部署设置)。修改保存后执行以下命令应用配置，Compose 会重新创建配置有变更的容器，保留数据卷：
+
+```sh
+docker compose up -d
+```
 
 镜像已包含依赖、字体和版面模型；翻译时需能访问所选模型服务。默认同时翻译 **2** 个任务，每份文件最多 **100 MiB**；默认启用自动 OCR，关闭自动术语提取。
 

@@ -1,130 +1,190 @@
 # PDF AI Translator
 
-[简体中文](README.md) · [English](README.en.md)
+<p align="center">
+  <strong>专为学术论文、专业报告与外文书籍打造的私有化 PDF 智能翻译工作台</strong>
+</p>
 
-可私有部署的 PDF 翻译 Web 应用。在浏览器上传文档、选择模型、查看进度，下载保留排版的译文或双语 PDF。支持多文件并发、OCR、表格处理和参考文献跳过。
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-AGPL--3.0-blue.svg?style=flat-square" alt="License"></a>
+  <a href="https://github.com/zincnan/server-pdf2zh/pkgs/container/pdf-ai-translator-server"><img src="https://img.shields.io/badge/Docker-ghcr.io-2496ED?logo=docker&logoColor=white&style=flat-square" alt="Docker Image"></a>
+  <img src="https://img.shields.io/badge/Platform-linux%2Famd64%20%7C%20linux%2Farm64-brightgreen?style=flat-square" alt="Platform">
+  <a href="https://github.com/zincnan/server-pdf2zh/stargazers"><img src="https://img.shields.io/github/stars/zincnan/server-pdf2zh?style=flat-square&logo=github" alt="GitHub Stars"></a>
+</p>
 
-## 快速开始
+<p align="center">
+  <a href="README.md">简体中文</a> · <a href="README.en.md">English</a>
+</p>
 
-安装 Docker 和 Docker Compose v2。推荐使用已发布镜像，无需下载源码或本地构建。首次部署时，下载 [镜像部署配置](compose.image.yaml) 保存为 `compose.yaml`，并下载 [.env.example](.env.example) 保存为 `.env`：
+---
+
+**PDF AI Translator** 是一款支持一键私有化部署的 PDF 智能翻译 Web 应用。通过深度集成先进翻译引擎与大语言模型，在完整保留原文排版、数学公式、图表布局的前提下，为您输出高质量的单语译文或双语对照 PDF。支持双栏学术论文智能拆分、多文件并发处理以及完全离线的私有环境部署。
+
+---
+
+## ✨ 核心特性
+
+- 📑 **完美排版保留**：精准还原原文版面布局、字体层级、数学公式与图表位置，告别翻译后格式错乱的烦恼。
+- 📖 **多元双语排版**：
+  - **译文 PDF**：纯译文精读模式，完整继承原版式。
+  - **双语对照**：支持同页“左右并排”或“交替分页”，阅读对比得心应手。
+  - **双栏论文裁剪**：针对学术论文的双栏版式智能切分，生成适合平板与手机阅读的单栏流。
+- 🌐 **153+ 全球语种支持**：内置主流与小众语言库，支持按中文名称或 ISO 代码即时搜索，常用语种置顶。
+- 🤖 **全模型生态兼容**：
+  - 兼容 OpenAI 标准 API，可无缝接入 DeepSeek、GPT-4o、Claude、Qwen、GLM 等主流模型。
+  - 完美支持本地宿主机或内网部署的 **Ollama** 与 **vLLM**，实现完全本地化、零数据外泄的隐私翻译。
+  - 支持 **Thinking** 思维链推理开关与 JSON 结构化输出。
+  - 内置 Google / Bing 免费机器翻译引擎兜底。
+- ⚡ **生产就绪与开箱即用**：
+  - **多任务并发**：支持多份文档批量上传，后台异步排队与翻译处理。
+  - **高级文档处理**：内置自动 OCR 识别、表格语义还原，支持自动跳过文末参考文献（节约 Token 与处理时间）。
+  - **配置自动记忆**：语言、布局及高级参数自动保存在服务端，刷新页面或服务重启无感恢复。
+- 🔒 **私有化与完全离线**：容器内已打包字体与排版算法模型，支持纯局域网、物理离线机房部署。
+
+---
+
+## 🚀 快速开始
+
+### 前置要求
+确保本地已安装 [Docker](https://docs.docker.com/engine/install/) 与 [Docker Compose v2](https://docs.docker.com/compose/)（系统要求原生支持 `amd64` / `arm64` 架构）。
+
+### 一键启动
+推荐直接使用预构建的官方镜像，无需克隆代码或本地编译：
 
 ```sh
-mkdir -p pdf-ai-translator
-cd pdf-ai-translator
+mkdir -p pdf-ai-translator && cd pdf-ai-translator
 curl -fsSL https://raw.githubusercontent.com/zincnan/server-pdf2zh/main/compose.image.yaml -o compose.yaml
 test -f .env || curl -fsSL https://raw.githubusercontent.com/zincnan/server-pdf2zh/main/.env.example -o .env
 docker compose pull
 docker compose up -d
 ```
 
-`docker compose pull` 会下载 `ghcr.io/zincnan/pdf-ai-translator-server:latest`，`up -d` 启动服务。无需单独执行 `docker pull`；不用 Compose 时，也可以使用 [docker run](server/doc/deployment.md#docker-without-compose)。
+> [!TIP]
+> 如果不希望使用 Docker Compose，也可以直接使用 [docker run 独立运行](server/doc/deployment.md#docker-without-compose)。
 
-打开 **http://127.0.0.1:7000**：
+### 网页操作（3 步上手）
+启动完成后，在浏览器中打开 **http://127.0.0.1:7000**：
 
-1. 在“模型服务”中添加配置并激活。
-2. 上传 PDF，选择参数，点击“开始翻译”。
-3. 完成后下载文件；不再需要时点击 `Clear` 或 `Clear all`。
+1. **添加模型服务**：点击顶部导航栏的“模型服务”，添加并激活您的 AI 模型配置。
+2. **上传文档与配置参数**：拖放上传一份或多份 PDF，选择源语言、目标语言及输出格式，点击“开始翻译”。
+3. **下载结果**：翻译在后台自动进行（关闭网页不影响任务进度）。完成后点击即可下载译文；文档不再需要时可点击 `Clear` 或 `Clear all` 清理记录。
 
-如需修改端口、开启局域网访问或更改登录密码，再编辑同目录的 `.env`，具体见[部署设置](#部署设置)。修改保存后执行以下命令应用配置，Compose 会重新创建配置有变更的容器，保留数据卷：
+---
 
-```sh
-docker compose up -d
-```
+## 🤖 模型服务配置
 
-镜像已包含依赖、字体和版面模型；翻译时需能访问所选模型服务。默认同时翻译 **2** 个任务，每份文件最多 **100 MiB**；默认启用自动 OCR，关闭自动术语提取。
+您可以在 Web 界面保存多套模型配置并自由切换（切换配置不会影响正在运行的翻译任务）。
 
-发布流程分别构建并测试 `linux/amd64`（Intel/AMD 64 位）和 `linux/arm64`，再合并为同一镜像标签，Docker 会自动选择架构。旧的单架构镜像需重新发布后才支持 ARM64。
+| 服务类型 | 必填项 | 适用场景与范例 |
+| :--- | :--- | :--- |
+| **OpenAI compatible** | 配置名称、Base URL、API Key、Model ID | DeepSeek、OpenAI、Claude、Kimi、Ollama、vLLM、硅基流动等 |
+| **Google 翻译 / Bing 翻译** | 配置名称 | 免 API 密钥的通用快速机器翻译 |
 
-输出文件可多选，同时勾选“译文 PDF”和“双语 PDF”会生成两份文件。双语 PDF 可选“左右并排”或“交替分页”；裁剪选项主要适合双栏论文。
+### 常见模型配置范例
 
-原文和译文语言均通过下拉框选择，可按中文名称或语言代码搜索。提供引擎列出的 153 个语言选项，常用语言优先显示，默认“英语 → 简体中文”。实际翻译效果取决于所选模型及引擎的字体、排版支持。
+#### 1. DeepSeek 官方 API
+- **Base URL**：`https://api.deepseek.com`
+- **Model ID**：`deepseek-chat` 或 `deepseek-reasoner`（推理模型自动识别 Thinking 参数）
 
-翻译参数修改后自动保存在服务端，刷新页面或重启服务时会恢复。语言、输出类型、布局和高级参数均会保留，`Clear` 不会删除这些设置；保存失败时会提示重试。当前为单用户服务，不同浏览器读取同一套设置。
+#### 2. 本地宿主机 Ollama
+当服务运行在 Docker 容器中时，若 Ollama 安装在宿主机上，请勿填写 `localhost`（其指向容器自身），需使用 Docker 桥接域名：
+- **Base URL**：`http://host.docker.internal:11434/v1`
+- **API Key**：可随意填写任意非空字符（如 `ollama`）
+- **Model ID**：您的本地模型名称（例如 `qwen2.5:7b`）
+- *注意：宿主机 Ollama 需监听 `0.0.0.0` 或允许 Docker 网段访问。*
 
-## 模型服务
+> 更多关于思考开关、参数调优与服务商兼容性，请参阅 [模型配置深度说明](server/doc/model-configuration.md)。
 
-| 类型 | 需要填写 |
-| --- | --- |
-| OpenAI compatible | 配置名称、Base URL、API Key、Model ID |
-| Google 翻译 / Bing 翻译 | 配置名称 |
+---
 
-可以保存多个配置并激活一个；切换或编辑配置不影响已提交任务。JSON 模式、思考开关和推理强度直接在表单中设置。思考参数按 Model ID 自动识别，自定义别名可能无法识别；不发送温度参数。[参数说明](server/doc/model-configuration.md)
+## ⚙️ 部署设置与常用命令
 
-连接宿主机 Ollama 的 OpenAI 兼容接口时，Base URL 使用 `http://host.docker.internal:11434/v1`；容器内的 `localhost` 指向容器自身。模型服务需允许来自 Docker 网段的连接。
+Docker Compose 会自动读取 `compose.yaml` 同级目录下的 `.env` 文件。
 
-## 部署设置
-
-Compose 会自动读取 `compose.yaml` 同目录的 `.env`，无需修改 Compose 文件。快速开始已下载模板；以下示例允许局域网访问，并把访问端口改为 **8080**：
+### 开启局域网远程访问与修改端口
+编辑同目录的 `.env`：
 
 ```dotenv
-BIND_ADDRESS=0.0.0.0
-PORT=8080
-ACCESS_PASSWORD=your-password
+BIND_ADDRESS=0.0.0.0       # 允许局域网/公网访问
+PORT=8080                  # 将外部访问端口修改为 8080
+ACCESS_PASSWORD=your_password  # 设置强访问密码（开启远程访问时强制要求登录）
 ```
 
-修改保存后执行 `docker compose up -d`，然后访问 `http://服务器IP:8080`，使用配置的密码登录。`PORT` 只改变宿主机访问端口，容器内部仍使用 7000。
-
-| 变量 | 默认值 | 说明 |
-| --- | --- | --- |
-| `IMAGE` | `ghcr.io/zincnan/pdf-ai-translator-server:latest` | 仅镜像部署使用；可改为 `ghcr.io/zincnan/pdf-ai-translator-server:1.0.0` 固定版本 |
-| `BIND_ADDRESS` | `127.0.0.1` | 仅本机访问；设为 `0.0.0.0` 后允许远程访问并要求登录 |
-| `PORT` | `7000` | 宿主机端口 |
-| `ACCESS_PASSWORD` | `pdf2zh` | 远程访问密码 |
-| `MAX_CONCURRENT_TASKS` | `2` | 同时执行的任务数，范围 1–32 |
-| `MAX_UPLOAD_MB` | `100` | 单份 PDF 上限，单位 MiB |
-| `SHUTDOWN_GRACE_SECONDS` | `600` | 停止服务时等待任务的秒数 |
-| `COOKIE_SECURE` | `false` | 通过 HTTPS 访问时设为 `true` |
-
-使用反向代理时保持页面和 API 同源，为 `/events` 关闭缓冲并允许长连接。
+保存后执行以下命令重新加载配置（保留原数据卷）：
 
 ```sh
-docker compose logs -f pdf-ai-translator-server  # 查看服务日志
-docker compose down                           # 停止服务，保留数据
-```
-
-Compose 项目名为 `pdf-ai-translator`，服务名与容器名均为 `pdf-ai-translator-server`。镜像部署使用 GHCR 镜像；源码构建生成本地镜像 `pdf-ai-translator-server:latest`。
-
-更新镜像部署：
-
-```sh
-docker compose pull
 docker compose up -d
 ```
 
-固定版本时，先修改 `.env` 中的 `IMAGE`，再执行更新命令。更新会复用原数据卷。
+### 核心环境变量速查
 
-## 离线部署
+| 环境变量 | 默认值 | 作用与说明 |
+| :--- | :--- | :--- |
+| `IMAGE` | `ghcr.io/zincnan/pdf-ai-translator-server:latest` | 容器镜像版本，固定版本可写为具体 tag |
+| `BIND_ADDRESS` | `127.0.0.1` | 绑定 IP。设为 `0.0.0.0` 开放外网访问并强制密码鉴权 |
+| `PORT` | `7000` | 宿主机映射访问端口（容器内部端口固定为 7000） |
+| `ACCESS_PASSWORD` | `pdf2zh` | 远程访问身份验证密码 |
+| `MAX_CONCURRENT_TASKS` | `2` | 同时执行的最大翻译任务数（范围 1–32） |
+| `MAX_UPLOAD_MB` | `100` | 单份上传 PDF 最大文件尺寸（单位 MiB） |
+| `SHUTDOWN_GRACE_SECONDS`| `600` | 服务优雅停机等待任务结束的缓冲秒数 |
+| `COOKIE_SECURE` | `false` | 若在反向代理后使用 HTTPS，请设为 `true` |
 
-在联网机器上指定目标服务器架构并导出镜像。下例目标为 ARM64；AMD64 服务器请将 `linux/arm64` 改为 `linux/amd64`：
+### 日常运维命令
 
 ```sh
-docker pull --platform linux/arm64 ghcr.io/zincnan/pdf-ai-translator-server:latest
-docker save ghcr.io/zincnan/pdf-ai-translator-server:latest | gzip > pdf-ai-translator-server.tar.gz
+docker compose logs -f pdf-ai-translator-server  # 实时查看服务日志
+docker compose down                           # 停止并移除容器（数据卷保留）
+docker compose pull && docker compose up -d    # 一键拉取最新镜像平滑升级
 ```
 
-将镜像包、[compose.image.yaml](compose.image.yaml) 和配置好的 `.env` 复制到服务器，把 `compose.image.yaml` 保存为 `compose.yaml`，再执行：
+> [!NOTE]
+> **反向代理配置要点**：若在 Nginx 等反代工具后运行，请保证 Web 页面与 API 同源，并为 `/events` 服务端事件流（SSE）**关闭代理缓冲**（`proxy_buffering off;`）并允许长连接。
 
-```sh
-docker load -i pdf-ai-translator-server.tar.gz
-docker compose up -d --no-build --pull never
-```
+---
 
-服务器需提前安装 Docker 和 Compose。镜像已包含翻译引擎和静态资源，但翻译仍需能访问所选服务；完全离线时，请使用内网的 OpenAI 兼容模型服务。
+## 📦 离线环境部署
 
-## 数据与升级
+针对无外网连接的保密内网或隔离机房，可在联网机器上打包镜像后导入目标服务器：
 
-默认数据卷为 **`pdf-ai-translator-data`**，挂载到 `/data`，保存模型配置、密钥、原文、结果和任务记录。
+1. **联网机器导出镜像**（以 ARM64 目标机为例，AMD64 请替换为 `linux/amd64`）：
+   ```sh
+   docker pull --platform linux/arm64 ghcr.io/zincnan/pdf-ai-translator-server:latest
+   docker save ghcr.io/zincnan/pdf-ai-translator-server:latest | gzip > pdf-ai-translator-server.tar.gz
+   ```
 
-- 关闭网页不影响翻译。服务重启后保留已完成结果，中断任务可手动重新翻译，不保证断点续译。
-- `Clear` 清理单个已结束任务的全部数据；`Clear all` 跳过运行中或下载中的任务。模型配置单独保存，不随任务清理。
-- 任务不会自动过期。`docker compose down` 保留数据；`docker compose down -v` 会删除默认数据卷。
-- 旧部署升级时，先停止旧容器，再在 `.env` 中设置 `DATA_VOLUME=原数据卷名称`、`DATA_VOLUME_EXTERNAL=true`，即可复用原数据。不要让两个实例同时使用同一数据卷。[迁移步骤](server/doc/deployment.md)
+2. **传输并加载到离线服务器**：
+   将 `pdf-ai-translator-server.tar.gz`、[compose.image.yaml](compose.image.yaml) 以及 `.env` 复制到离线服务器。将 `compose.image.yaml` 命名为 `compose.yaml`，执行：
+   ```sh
+   docker load -i pdf-ai-translator-server.tar.gz
+   docker compose up -d --no-build --pull never
+   ```
 
-旧版模型配置会自动备份并迁移；不再支持的服务类型显示为“待转换”，编辑后再激活。
+> 离线环境下请配合内网自建的 OpenAI 兼容端点（如内网 Ollama / vLLM）进行翻译。
 
-## 开发与来源
+---
 
-从源码构建时，克隆仓库并使用根目录的 `compose.yaml`：
+## 💾 数据持久化与升级
+
+默认创建持久化数据卷 **`pdf-ai-translator-data`**，挂载到容器内部 `/data`，负责存储模型密钥、历史任务、原文及翻译产物。
+
+- **后台持久运行**：关闭浏览器不中断翻译；重启容器后已完成结果完好保留，中断任务支持一键重新翻译。
+- **安全清理机制**：`Clear` 清理单个已结束任务的数据；`Clear all` 仅清理非运行中的历史记录，模型配置始终独立存储，永不随任务丢失。
+- **数据保留**：`docker compose down` 会保留所有任务与配置数据；请勿随意使用 `docker compose down -v`（`-v` 会销毁数据卷）。
+- **历史版本升级迁移**：如需接入旧数据卷，停止旧容器后在 `.env` 中设置 `DATA_VOLUME=原数据卷名称` 与 `DATA_VOLUME_EXTERNAL=true` 即可平滑复用。[详细迁移指南](server/doc/deployment.md)
+
+---
+
+## 📈 Star History
+
+如果您觉得本项目对您的工作或研究有所帮助，欢迎点亮右上角的 🌟 **Star** 支持我们！
+
+[![Star History Chart](https://api.star-history.com/svg?repos=zincnan/server-pdf2zh&type=Date)](https://star-history.com/#zincnan/server-pdf2zh&Date)
+
+---
+
+## 🛠️ 源码开发与鸣谢
+
+### 从源码运行
+如需二次开发或基于源码调试：
 
 ```sh
 git clone https://github.com/zincnan/server-pdf2zh.git
@@ -133,8 +193,13 @@ test -f .env || cp .env.example .env
 docker compose up -d --build
 ```
 
-首次构建需要联网下载依赖、字体和版面模型。
+### 文档导航
+- [开发环境搭建与单元测试](server/doc/development.md)
+- [表格翻译处理模式详解](server/doc/table-modes.md)
+- [参考文献智能跳过机制](server/doc/reference-skip.md)
+- [错误排查与状态代码字典](server/doc/error-catalog.md)
 
-[开发与测试](server/doc/development.md) · [表格处理](server/doc/table-modes.md) · [参考文献跳过](server/doc/reference-skip.md)
+### 致谢与开源协议
+本项目基于 [zotero-pdf2zh](https://github.com/guaguastandup/zotero-pdf2zh) 改造，核心翻译能力依赖优秀的开源项目 [PDFMathTranslate Next](https://github.com/PDFMathTranslate-next/PDFMathTranslate-next) 与 [BabelDOC](https://github.com/funstory-ai/BabelDOC)。
 
-基于 [zotero-pdf2zh](https://github.com/guaguastandup/zotero-pdf2zh) 改造，翻译引擎使用 [PDFMathTranslate Next](https://github.com/PDFMathTranslate-next/PDFMathTranslate-next) 和 [BabelDOC](https://github.com/funstory-ai/BabelDOC)。许可证：[AGPL-3.0](LICENSE)。
+本项目遵循 [AGPL-3.0 许可证](LICENSE)。
